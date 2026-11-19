@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import subprocess
 import tempfile
 import types
@@ -22,6 +23,8 @@ from scripts.installer import Installer
 from scripts.models import (
     COMPONENTS,
     PROFILES,
+    HF_ENDPOINT_DEFAULT,
+    HF_MIRROR_ENDPOINT,
     REMOTE_PROBE_ATTEMPTS,
     ModelDownloader,
     ModelError,
@@ -260,6 +263,82 @@ class RemoteProbeTests(unittest.TestCase):
             self.assertEqual(sleeps, [2 ** i for i in range(1, REMOTE_PROBE_ATTEMPTS)])
 
 
+class MirrorSourceTests(unittest.TestCase):
+    """用户定案：缺省官方源；--mirror 选镜像且启用前全量核对，任一缺项即放弃镜像回落官方。"""
+
+    def make_downloader(self, tmp: str, **kwargs) -> ModelDownloader:
+        comfy = Path(tmp) / "vendor/ComfyUI"
+        comfy.mkdir(parents=True, exist_ok=True)
+        (comfy / "main.py").touch()
+        return ModelDownloader(comfy, runner=ScriptedRunner(), log=lambda m: None, **kwargs)
+
+    def test_default_endpoint_is_official_mirror_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict("scripts.models.os.environ", {}, clear=True):
+                self.assertEqual(self.make_downloader(temporary).hf_endpoint(), HF_ENDPOINT_DEFAULT)
+                self.assertEqual(HF_ENDPOINT_DEFAULT, "https://huggingface.co")
+                self.assertEqual(self.make_downloader(temporary, mirror=True).hf_endpoint(), HF_MIRROR_ENDPOINT)
+
+    def test_env_override_wins_over_mirror_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict("scripts.models.os.environ", {"HF_ENDPOINT": "https://custom.example"}):
+                self.assertEqual(self.make_downloader(temporary, mirror=True).hf_endpoint(), "https://custom.example")
+
+    def test_mirror_manifest_requires_every_item_exact(self) -> None:
+        spec_a = ModelSpec("r/x", "int8/a.safetensors", 100, "diffusion_models")
+        spec_b = ModelSpec("r/y", "vae/b.safetensors", 50, "vae")
+        trees = {
+            "r/x/tree/main/int8": [{"path": "int8/a.safetensors", "size": 100}],
+            "r/y/tree/main/vae": [{"path": "vae/b.safetensors", "size": 50}],
+        }
+
+        def fake_urlopen(request, timeout=None):
+            url = getattr(request, "full_url", request)  # 兼容字符串 URL 与 Request 对象
+            for suffix, items in trees.items():
+                if url.endswith(suffix):
+                    return io.BytesIO(json.dumps(items).encode("utf-8"))
+            raise OSError("unexpected url")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("scripts.models.urllib.request.urlopen", fake_urlopen):
+                self.assertTrue(self.make_downloader(temporary, mirror=True)
+                                .mirror_manifest_complete((spec_a, spec_b)))
+                # 缺项 → False
+                self.assertFalse(self.make_downloader(temporary, mirror=True).mirror_manifest_complete(
+                    (spec_a, spec_b, ModelSpec("r/y", "vae/c.safetensors", 10, "vae"))))
+                # 大小不符 → False
+                drift = ModelSpec("r/x", "int8/a.safetensors", 999, "diffusion_models")
+                self.assertFalse(self.make_downloader(temporary, mirror=True).mirror_manifest_complete((drift,)))
+            # 查询失败 → False
+            with patch("scripts.models.urllib.request.urlopen", side_effect=OSError("down")):
+                self.assertFalse(self.make_downloader(temporary, mirror=True).mirror_manifest_complete((spec_a,)))
+
+    def test_incomplete_mirror_falls_back_to_official(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            logs: list[str] = []
+            downloader = self.make_downloader(temporary, mirror=True, dry_run=True)
+            downloader.log = logs.append
+            spec = ModelSpec("r/x", "int8/a.safetensors", 100, "diffusion_models")
+            with patch("scripts.models.COMPONENTS", {"a": spec}):
+                with patch.object(downloader, "mirror_manifest_complete", return_value=False):
+                    with patch.object(downloader, "remote_model_size", lambda s: s.size):
+                        downloader.download(make_profile("a"))
+            self.assertFalse(downloader.mirror)
+            self.assertEqual(downloader.hf_endpoint(), HF_ENDPOINT_DEFAULT)
+            self.assertTrue(any("放弃镜像" in line for line in logs))
+
+    def test_complete_mirror_stays_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            downloader = self.make_downloader(temporary, mirror=True, dry_run=True)
+            spec = ModelSpec("r/x", "int8/a.safetensors", 100, "diffusion_models")
+            with patch("scripts.models.COMPONENTS", {"a": spec}):
+                with patch.object(downloader, "mirror_manifest_complete", return_value=True):
+                    with patch.object(downloader, "remote_model_size", lambda s: s.size):
+                        downloader.download(make_profile("a"))
+            self.assertTrue(downloader.mirror)
+            self.assertEqual(downloader.hf_endpoint(), HF_MIRROR_ENDPOINT)
+
+
 class ModelsEntryTests(unittest.TestCase):
     """根入口 models.py：档位解析（config/--profile）、内存门槛、dry-run 透传、错误口径。"""
 
@@ -321,6 +400,17 @@ class ModelsEntryTests(unittest.TestCase):
                            lambda self, profile: seen.append(profile.name)):
                     self.assertEqual(models.main(["--profile", "int8"], installer=installer), 0)
             self.assertEqual(seen, ["int8"])
+
+    def test_mirror_flag_reaches_downloader(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            _root, installer = self.make_root(temporary)
+            seen: list[bool] = []
+            with patch("models.total_ram_gib", return_value=96.0):
+                with patch("scripts.models.ModelDownloader.download",
+                           lambda self, profile: seen.append(self.mirror)):
+                    self.assertEqual(models.main([], installer=installer), 0)
+                    self.assertEqual(models.main(["--mirror"], installer=installer), 0)
+            self.assertEqual(seen, [False, True])
 
     def test_comfyui_missing_hints_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

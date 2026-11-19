@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -20,7 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-HF_ENDPOINT_DEFAULT = "https://hf-mirror.com"
+HF_ENDPOINT_DEFAULT = "https://huggingface.co"
+HF_MIRROR_ENDPOINT = "https://hf-mirror.com"
 STAGING_DIRNAME = ".viggle-staging"
 DEFAULT_PROFILE = "int8"
 REMOTE_PROBE_ATTEMPTS = 5  # 远端校验瞬时错误（502/超时等）重试次数，退避 2/4/8/16s
@@ -102,11 +104,13 @@ class ModelDownloader:
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
         log: Callable[[str], None] = print,
         dry_run: bool = False,
+        mirror: bool = False,
     ) -> None:
         self.comfy = comfy
         self.runner = runner or subprocess.run
         self.log = log
         self.dry_run = dry_run
+        self.mirror = mirror
 
     def run_command(self, command: Sequence[str | Path], *, env: dict[str, str] | None = None) -> None:
         normalized = [str(part) for part in command]
@@ -119,7 +123,31 @@ class ModelDownloader:
             raise ModelError(f"无法执行 {normalized[0]}：{exc}") from exc
 
     def hf_endpoint(self) -> str:
-        return os.environ.get("HF_ENDPOINT") or HF_ENDPOINT_DEFAULT
+        if os.environ.get("HF_ENDPOINT"):
+            return os.environ["HF_ENDPOINT"]
+        return HF_MIRROR_ENDPOINT if self.mirror else HF_ENDPOINT_DEFAULT
+
+    def mirror_manifest_complete(self, specs: Sequence[ModelSpec]) -> bool:
+        """镜像启用前全量核对：清单每一项都须在镜像侧真实存在且字节数一致。
+
+        以 api/models/{repo}/tree/main/{dir} 零费元数据比对；任一缺项/不符/查询失败
+        即返回 False（放弃镜像方案，回落官方源）。
+        """
+        trees: dict[tuple[str, str], dict[str, int] | None] = {}
+        for spec in specs:
+            directory = spec.path.rsplit("/", 1)[0]
+            key = (spec.repo, directory)
+            if key not in trees:
+                url = f"{HF_MIRROR_ENDPOINT}/api/models/{spec.repo}/tree/main/{directory}"
+                try:
+                    with urllib.request.urlopen(url, timeout=30) as response:
+                        trees[key] = {item["path"]: item.get("size") for item in json.load(response)}
+                except Exception:
+                    trees[key] = None
+            tree = trees[key]
+            if tree is None or tree.get(spec.path) != spec.size:
+                return False
+        return True
 
     def hf_download_env(self) -> dict[str, str]:
         return {**os.environ, "HF_ENDPOINT": self.hf_endpoint(), "UV_HTTP_TIMEOUT": "600"}
@@ -178,6 +206,9 @@ class ModelDownloader:
         if not (self.comfy / "main.py").is_file():
             raise ModelError(f"ComfyUI 未就绪（{self.comfy}）；请先执行 install.py（阶段 4 ComfyUI 准备）。")
         specs = profile_specs(profile)
+        if self.mirror and not self.mirror_manifest_complete(specs):
+            self.mirror = False
+            self.log("国内镜像清单核对不全（缺项或大小不符），放弃镜像改用官方源 huggingface.co。")
         pending = [spec for spec in specs if not self.model_file_ok(spec)]
         self.log(f"模型档位 {profile.name}：清单 {len(specs)} 项；已就绪 {len(specs) - len(pending)} 项，"
                  f"待下载 {len(pending)} 项。")
