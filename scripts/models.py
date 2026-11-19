@@ -23,6 +23,7 @@ from typing import Callable, Sequence
 HF_ENDPOINT_DEFAULT = "https://hf-mirror.com"
 STAGING_DIRNAME = ".viggle-staging"
 DEFAULT_PROFILE = "int8"
+REMOTE_PROBE_ATTEMPTS = 5  # 远端校验瞬时错误（502/超时等）重试次数，退避 2/4/8/16s
 
 
 class ModelError(RuntimeError):
@@ -142,13 +143,14 @@ class ModelDownloader:
     def remote_model_size(self, spec: ModelSpec) -> int:
         """以 Range 请求取远端文件精确大小并核对清单；大小不符即报错（不下载）。
 
-        重定向（hf-mirror→hf.co→CDN）由 urllib 自动跟随且保留 Range 头；瞬时网络错误重试 3 次。
+        重定向（hf-mirror→hf.co→CDN）由 urllib 自动跟随且保留 Range 头；
+        镜像网关瞬时故障（502/超时等）按指数退避重试（M6 云端实测 502）。
         """
         url = f"{self.hf_endpoint()}/{spec.repo}/resolve/main/{spec.path}"
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(REMOTE_PROBE_ATTEMPTS):
             if attempt:
-                time.sleep(2)
+                time.sleep(2 ** attempt)
             request = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
             try:
                 with urllib.request.urlopen(request, timeout=60) as response:
@@ -170,7 +172,7 @@ class ModelDownloader:
             if total != spec.size:
                 raise ModelError(f"远端大小与清单不符：{spec.repo}/{spec.path} 期望 {spec.size} 字节，实际 {total}。")
             return total
-        raise ModelError(f"远端模型校验失败（已重试 3 次）：{url}：{last_error}")
+        raise ModelError(f"远端模型校验失败（已重试 {REMOTE_PROBE_ATTEMPTS} 次）：{url}：{last_error}")
 
     def download(self, profile: ModelProfile) -> None:
         if not (self.comfy / "main.py").is_file():

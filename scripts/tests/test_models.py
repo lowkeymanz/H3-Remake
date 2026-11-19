@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from typing import Callable
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from scripts.installer import Installer
 from scripts.models import (
     COMPONENTS,
     PROFILES,
+    REMOTE_PROBE_ATTEMPTS,
     ModelDownloader,
     ModelError,
     ModelProfile,
@@ -196,6 +198,66 @@ class DownloadTests(unittest.TestCase):
                         with self.assertRaisesRegex(ModelError, "磁盘"):
                             downloader.download(make_profile("a"))
             self.assertEqual(runner.calls, [])
+
+
+class RemoteProbeTests(unittest.TestCase):
+    """M6 云端实测：hf-mirror 网关瞬时 502；校验须指数退避重试而非固定短间隔 3 次即放弃。"""
+
+    def make_downloader(self, tmp: str) -> ModelDownloader:
+        comfy = Path(tmp) / "vendor/ComfyUI"
+        comfy.mkdir(parents=True)
+        return ModelDownloader(comfy, runner=ScriptedRunner(), log=lambda m: None)
+
+    @staticmethod
+    def http_502(url: str) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
+
+    def test_transient_502_recovers_with_exponential_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            downloader = self.make_downloader(temporary)
+            spec = ModelSpec("r/x", "int8/a.safetensors", 100, "diffusion_models")
+            calls: list[str] = []
+            sleeps: list[float] = []
+
+            class Response:
+                status = 206
+                headers = {"Content-Range": "bytes 0-0/100"}
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            def fake_urlopen(request, timeout=None):
+                calls.append(request.full_url)
+                if len(calls) <= 2:
+                    raise self.http_502(request.full_url)
+                return Response()
+
+            with patch("scripts.models.urllib.request.urlopen", fake_urlopen):
+                with patch("scripts.models.time.sleep", sleeps.append):
+                    self.assertEqual(downloader.remote_model_size(spec), 100)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(sleeps, [2, 4])  # 指数退避，非固定 2s
+
+    def test_persistent_502_exhausts_attempts_then_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            downloader = self.make_downloader(temporary)
+            spec = ModelSpec("r/x", "int8/a.safetensors", 100, "diffusion_models")
+            calls: list[str] = []
+            sleeps: list[float] = []
+
+            def fake_urlopen(request, timeout=None):
+                calls.append(request.full_url)
+                raise self.http_502(request.full_url)
+
+            with patch("scripts.models.urllib.request.urlopen", fake_urlopen):
+                with patch("scripts.models.time.sleep", sleeps.append):
+                    with self.assertRaisesRegex(ModelError, f"已重试 {REMOTE_PROBE_ATTEMPTS} 次"):
+                        downloader.remote_model_size(spec)
+            self.assertEqual(len(calls), REMOTE_PROBE_ATTEMPTS)
+            self.assertEqual(sleeps, [2 ** i for i in range(1, REMOTE_PROBE_ATTEMPTS)])
 
 
 class ModelsEntryTests(unittest.TestCase):
