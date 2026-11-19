@@ -12,7 +12,7 @@ import types
 import unittest
 from pathlib import Path
 from typing import Callable
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 import install
 from scripts.installer import (
@@ -24,6 +24,7 @@ from scripts.installer import (
     Installer,
     STAGE_NAMES,
     TORCH_INDEX_URL,
+    total_ram_gib,
     venv_python,
 )
 
@@ -448,6 +449,35 @@ class ComfyUiStageTests(unittest.TestCase):
                        return_value=types.SimpleNamespace(free=200 * 2**30)):
                 with patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
                     installer.preflight(full=True)
+
+
+class RamProbeTests(unittest.TestCase):
+    """M6 云端实测：sysconf 常量名误写 SCM_* 致 Linux 内存恒 0；修复后 SC_* + /proc/meminfo 回落。"""
+
+    def test_posix_sysconf_uses_sc_names(self) -> None:
+        asked: list[str] = []
+
+        def fake_sysconf(name: str) -> int:
+            asked.append(name)
+            return {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": 100 * 2**30 // 4096}[name]
+
+        with patch("scripts.installer.sys.platform", "linux"):
+            with patch("scripts.installer.os.sysconf", side_effect=fake_sysconf, create=True):
+                self.assertEqual(total_ram_gib(), 100.0)
+        self.assertEqual(asked, ["SC_PAGE_SIZE", "SC_PHYS_PAGES"])  # 防 SCM_* 拼写回归
+
+    def test_posix_falls_back_to_meminfo(self) -> None:
+        meminfo = "MemFree:        1234567 kB\nMemTotal:       100663296 kB\n"
+        with patch("scripts.installer.sys.platform", "linux"):
+            with patch("scripts.installer.os.sysconf", side_effect=ValueError("unavailable"), create=True):
+                with patch("builtins.open", mock_open(read_data=meminfo)):
+                    self.assertEqual(total_ram_gib(), 96.0)
+
+    def test_posix_both_probes_fail_returns_zero(self) -> None:
+        with patch("scripts.installer.sys.platform", "linux"):
+            with patch("scripts.installer.os.sysconf", side_effect=OSError("no sysconf"), create=True):
+                with patch("builtins.open", side_effect=OSError("no meminfo")):
+                    self.assertEqual(total_ram_gib(), 0.0)
 
 
 class NodeStageTests(unittest.TestCase):
