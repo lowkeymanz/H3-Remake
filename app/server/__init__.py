@@ -1,0 +1,1 @@
+"""Web 后端（M5）：FastAPI 任务/角色库/反馈 API + sqlite 持久化 + agent 进程池（5.2）。"""
