@@ -60,13 +60,14 @@ Useful flags:
 - `uv run install.py --stages 6,4` — re-run selected stages (idempotent; model download is a separate entry, `models.py`)
 - `uv run models.py --dry-run` — verify remote file sizes against the pinned manifest, download nothing
 - `uv run models.py --list` / `--profile <name>` — model profiles (currently `int8`)
+- `uv run models.py --mirror` — opt into the `hf-mirror.com` mirror (default is official `huggingface.co`); the full manifest is pre-checked on the mirror and any missing item falls back to the official source
 - `uv run start.py --host 0.0.0.0 --port 8000` — expose the UI beyond localhost
 
 An existing ComfyUI v0.42.0 installation can be reused instead of the bundled one: set `[comfyui] mode = "external"` and `path` in `config.toml` before installing.
 
 ## Model weights (int8 profile)
 
-Downloaded by `models.py` from Hugging Face (default endpoint `hf-mirror.com`, override with `HF_ENDPOINT`). Files are verified byte-exact against a pinned manifest; existing valid files are skipped, so re-runs only fetch what is missing.
+Downloaded by `models.py` from official Hugging Face (`huggingface.co`) by default; `--mirror` opts into `hf-mirror.com` (every manifest item is verified present on the mirror first, otherwise it falls back to the official source), and `HF_ENDPOINT` overrides both. Files are verified byte-exact against a pinned manifest; existing valid files are skipped, so re-runs only fetch what is missing.
 
 | Component | File | Source repo | Size |
 |---|---|---|---|

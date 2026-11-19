@@ -3,6 +3,8 @@
 档位由 config.toml [models].profile 决定（缺省 int8 定稿档），--profile 可临时覆盖；
 --dry-run 只校验远端清单并输出下载计划，不实际下载。依赖 install.py 阶段 4 的 ComfyUI 就绪；
 下载前按档位 min_ram_gib 硬检查系统内存（int8 权重 mmap 驻留需 ≥64 GiB）。
+下载源缺省为官方 huggingface.co；--mirror 选用国内镜像 hf-mirror.com，启用前全量核对
+镜像侧清单，任一缺项即放弃镜像回落官方。
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ def main(argv: list[str] | None = None, installer: Installer | None = None) -> i
     parser = argparse.ArgumentParser(description="下载 Viggle Remake 模型权重（环境安装见 install.py）")
     parser.add_argument("--profile", metavar="档位", help="模型档位（缺省读 config.toml [models].profile；--list 查看可用档位）")
     parser.add_argument("--dry-run", action="store_true", help="只校验远端清单并输出下载计划，不实际下载")
+    parser.add_argument("--mirror", action="store_true",
+                        help="选用国内镜像 hf-mirror.com（缺省官方 huggingface.co）；镜像清单任一缺项即自动回落官方")
     parser.add_argument("--list", action="store_true", help="列出已注册档位后退出")
     args = parser.parse_args(argv)
     if args.list:
@@ -38,7 +42,7 @@ def main(argv: list[str] | None = None, installer: Installer | None = None) -> i
             raise ModelError(f"系统内存 {ram_gib:.0f} GiB 低于档位 {profile.name} 所需 {profile.min_ram_gib:.0f} GiB："
                              "权重 mmap 驻留需要更多内存（建议 96 GiB）。")
         comfy, _source = installer.resolve_comfyui()
-        downloader = ModelDownloader(comfy, runner=installer.runner, dry_run=args.dry_run)
+        downloader = ModelDownloader(comfy, runner=installer.runner, dry_run=args.dry_run, mirror=args.mirror)
         downloader.download(profile)
     except KeyboardInterrupt:
         print("\n下载已中断；再次运行同一命令即可继续（已就绪文件按精确字节跳过）。", file=sys.stderr)
