@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 前端（app/web/，M5.3）
+node_modules/
+app/web/dist/
+
+# 开发工作区（需求.md 四：不进 repo）
+dev/
+
+# 安装期拉取的第三方（需求.md 四）
+vendor/
+
+# 运行时本地配置（由 config.example.toml 生成，属 M2）
+config.toml
+
+# 密钥载体（dev/.env 已被 dev/ 覆盖；此条防御任意位置新增的 .env）
+.env
+.env.*
+
+# 工具/IDE 生成
+.comate/
+.idea/
+.merkle-snapshot.json
+.screenshots/
+
+# 系统
+.DS_Store
+Thumbs.db

@@ -1,0 +1,20 @@
+[project]
+name = "viggle-remake"
+version = "0.1.0"
+description = "Viggle Remake 自部署：Agent + MCP + ComfyUI worker + Web 前端"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0",        # 1.2 painter / 1.3 LLM 验证统一客户端
+    "mcp>=1.0",           # MCP SDK：1.4 POC 辅助 + 自研兜底 agent 备用
+    "pillow>=10.0",       # 验证脚本图片解码/缩放
+    "python-dotenv>=1.0", # dev/.env 读取候选 API key
+    "tomli>=2.0; python_version < '3.11'", # config.toml 读取（3.11+ 用标准库 tomllib）
+    "fastapi>=0.115",     # M5 Web 后端：任务/角色库/反馈 API + WS 进度
+    "uvicorn>=0.30",      # M5 后端 ASGI 服务器（start.py 阶段 9 服务入口）
+    "httpx>=0.27",        # M5 FastAPI TestClient 依赖（零费单测/E2E）
+    "python-multipart>=0.0.9", # M5 上传表单解析（FastAPI File/Form 运行时依赖）
+    "websockets>=16.1.1",
+]
+
+[tool.uv]
+package = false # 当前仅管理依赖；app/ 落地后再转打包模式
