@@ -323,7 +323,10 @@ class ComfyUiStageTests(unittest.TestCase):
                 (comfy / "comfyui_version.py").write_text(
                     f'__version__ = "{COMFYUI_VERSION}"', encoding="utf-8")
                 (comfy / "main.py").touch()
-                (comfy / "requirements.txt").touch()
+                (comfy / "requirements.txt").write_text(
+                    "comfyui-frontend-package==1.55.18\n"
+                    "comfyui-workflow-templates==0.11.89\n"
+                    "torch\n", encoding="utf-8")
 
             def fake_uv(command):
                 if command[1] == "venv":
@@ -343,7 +346,13 @@ class ComfyUiStageTests(unittest.TestCase):
             self.assertEqual(torch_call[torch_call.index("--index-url") + 1], TORCH_INDEX_URL)
             for pin in ("torchvision==0.24.1", "torchaudio==2.9.1"):
                 self.assertIn(pin, torch_call)
-            self.assertTrue(any("requirements.txt" in " ".join(call) for call in runner.calls))
+            self.assertTrue(any("requirements.viggle.txt" in " ".join(call) for call in runner.calls))
+            # 模板包仅供 Web UI 画廊（软依赖）且 media-assets 已从 PyPI 消失：过滤后安装，上游原文件不动
+            filtered = (comfy / "requirements.viggle.txt").read_text(encoding="utf-8")
+            self.assertNotIn("comfyui-workflow-templates", filtered)
+            self.assertIn("comfyui-frontend-package==1.55.18", filtered)
+            self.assertIn("comfyui-workflow-templates==0.11.89",
+                          (comfy / "requirements.txt").read_text(encoding="utf-8"))
             verify = [call for call in runner.calls if len(call) == 3 and call[1] == "-c"]
             self.assertEqual(len(verify), 1)
             self.assertIn("torch", verify[0][2])
@@ -365,6 +374,34 @@ class ComfyUiStageTests(unittest.TestCase):
             installer = Installer(root, runner=ScriptedRunner(), platform="win32")
             with self.assertRaisesRegex(InstallError, COMFYUI_VERSION):
                 installer.install_comfyui()
+
+    def test_filtered_requirements_drops_templates_only(self) -> None:
+        # M6 云端阶段 4 实测：comfyui-workflow-templates 锁定的 media-assets 依赖已从 PyPI 消失，
+        # 原样安装必然解析失败；该包仅供 Web UI 模板画廊（软依赖），worker 库导入渲染不需要
+        with tempfile.TemporaryDirectory() as temporary:
+            comfy = Path(temporary)
+            original = (
+                "comfyui-frontend-package==1.55.18\n"
+                "comfyui-workflow-templates==0.11.89\n"
+                "comfyui-workflow-templates-media-assets-02==0.1.17\n"
+                "torch\n"
+                "#non essential dependencies:\n"
+                "kornia>=0.7.1\n"
+            )
+            (comfy / "requirements.txt").write_text(original, encoding="utf-8")
+            installer = Installer(Path("unused"), runner=ScriptedRunner())
+            filtered = installer.filtered_requirements(comfy)
+            self.assertEqual(filtered, comfy / "requirements.viggle.txt")
+            content = filtered.read_text(encoding="utf-8")
+            self.assertNotIn("workflow-templates", content)
+            self.assertIn("comfyui-frontend-package==1.55.18\n", content)
+            self.assertIn("torch\n", content)
+            self.assertIn("#non essential dependencies:\n", content)
+            self.assertIn("kornia>=0.7.1\n", content)
+            self.assertEqual((comfy / "requirements.txt").read_text(encoding="utf-8"), original)
+            stamp = filtered.stat().st_mtime_ns
+            installer.filtered_requirements(comfy)  # 重入：内容不变不重写
+            self.assertEqual(filtered.stat().st_mtime_ns, stamp)
 
     def test_external_comfyui_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

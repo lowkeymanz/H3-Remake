@@ -411,9 +411,25 @@ class Installer:
             self.run_command(["uv", "venv", "--python", "3.12", comfy / "venv"])
         env = {**os.environ, "UV_HTTP_TIMEOUT": "600"}
         self.run_command(["uv", "pip", "install", "--python", python, *TORCH_PINS, "--index-url", TORCH_INDEX_URL], env=env)
-        self.run_command(["uv", "pip", "install", "--python", python, "-r", comfy / "requirements.txt"], env=env)
+        self.run_command(["uv", "pip", "install", "--python", python, "-r", self.filtered_requirements(comfy)], env=env)
         self.verify_comfyui_runtime(python)
         self.log(f"ComfyUI {COMFYUI_VERSION} 就绪（bundled）：{comfy}")
+
+    def filtered_requirements(self, comfy: Path) -> Path:
+        """生成剔除 comfyui-workflow-templates* 的 requirements 过滤副本（上游原文件不动）。
+
+        该包仅供 ComfyUI Web UI 模板画廊（frontend_management 内 try/except ImportError 软依赖），
+        worker 以库导入渲染不经过该路径；其锁定的 media-assets 依赖已从 PyPI 消失，
+        原样安装必然解析失败（M6 云端阶段 4 实测），故过滤后安装。
+        """
+        original = comfy / "requirements.txt"
+        lines = original.read_text(encoding="utf-8").splitlines(keepends=True)
+        kept = [line for line in lines if not line.strip().lower().startswith("comfyui-workflow-templates")]
+        filtered = comfy / "requirements.viggle.txt"
+        content = "".join(kept)
+        if not filtered.is_file() or filtered.read_text(encoding="utf-8") != content:
+            atomic_write(filtered, content)
+        return filtered
 
     def external_comfyui_python(self, comfy: Path) -> Path:
         for name in ("venv", ".venv"):
