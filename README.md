@@ -52,7 +52,7 @@ cp config.example.toml config.toml
 uv run start.py
 ```
 
-Open **http://127.0.0.1:8000** and create a task: upload a source video, pick swap or edit, and describe the task in one sentence. Swap additionally needs a source-person id and a target character picked from the character library (upload character sheets there first); a reference photo is optional.
+Open **http://127.0.0.1:8000** and create a task: upload a source video, pick swap or edit, and describe the task in one sentence. Swap needs one or more person→character mappings: for each person to replace, fill a source-person id (a natural-language label of that person in the source clip) and pick a target character from the character library (upload character sheets there first); use “添加人物映射” to add rows for multi-person replacement. Each mapping accepts an optional reference photo.
 
 By default the server binds to `127.0.0.1` (local machine only). On a cloud / remote server, launch with:
 
