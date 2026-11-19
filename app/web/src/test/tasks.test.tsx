@@ -15,6 +15,7 @@ const SETTINGS = {
 
 const CHARS = [
   { name: "Alice", sheet: "Alice_sheet.png", photo: null, desc: "测试角色", outfit: "" },
+  { name: "Bob", sheet: "Bob_sheet.png", photo: null, desc: "测试角色2", outfit: "" },
 ];
 
 function baseHandler(tasks = [makeTask()]) {
@@ -133,6 +134,77 @@ describe("TasksPage", () => {
     await user.type(screen.getByLabelText("任务描述"), "换人");
     await user.click(screen.getByRole("button", { name: "创建任务" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("swap 任务须填写源人物 id");
+  });
+
+  it("swap 多人映射：动态增行、cast 多组、逐行参考图上传为 photo", async () => {
+    const user = userEvent.setup();
+    const fetchFn = mockFetch((url, init) => {
+      if (url === "/api/tasks" && init?.method === "POST") {
+        return makeTask({ task_id: "tmulti", mode: "swap", status: "created" });
+      }
+      if (url === "/api/chars/Bob/photo" && init?.method === "POST") return CHARS[1];
+      return baseHandler()(url);
+    });
+    renderPage(<TasksPage />);
+    await screen.findByRole("heading", { name: "创建任务" });
+    await user.selectOptions(screen.getByLabelText("模式"), "swap");
+    await user.upload(screen.getByLabelText(/源视频/), new File(["v"], "s.mp4", { type: "video/mp4" }));
+    await user.type(screen.getByLabelText("任务描述"), "两人都换");
+    await user.type(screen.getByLabelText(/源人物 id/), "p0");
+    await user.selectOptions(screen.getByLabelText(/目标角色/), "Alice");
+    await user.click(screen.getByRole("button", { name: "添加人物映射" }));
+    const ids = screen.getAllByLabelText(/源人物 id/);
+    const chars = screen.getAllByLabelText(/目标角色/);
+    expect(ids).toHaveLength(2);
+    await user.type(ids[1], "p1");
+    await user.selectOptions(chars[1], "Bob");
+    await user.upload(screen.getAllByLabelText(/参考图/)[1], new File(["img"], "bob.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByTestId("detail-probe")).toBeInTheDocument();
+    const form = callOf(fetchFn, "/api/tasks", "POST")![1]!.body as FormData;
+    expect(JSON.parse(form.get("cast") as string)).toEqual({ p0: "Alice", p1: "Bob" });
+    const photo = callOf(fetchFn, "/api/chars/Bob/photo", "POST");
+    expect(photo).toBeTruthy();
+    expect(((photo![1]!.body as FormData).get("file") as File).name).toBe("bob.png");
+    expect(callOf(fetchFn, "/api/chars/Alice/photo", "POST")).toBeFalsy();
+  });
+
+  it("swap 多人校验：源人物 id 重复 / 增行未填全 均被拦截", async () => {
+    const user = userEvent.setup();
+    mockFetch(baseHandler());
+    renderPage(<TasksPage />);
+    await screen.findByRole("heading", { name: "创建任务" });
+    await user.selectOptions(screen.getByLabelText("模式"), "swap");
+    await user.upload(screen.getByLabelText(/源视频/), new File(["v"], "s.mp4", { type: "video/mp4" }));
+    await user.type(screen.getByLabelText("任务描述"), "换人");
+    await user.type(screen.getByLabelText(/源人物 id/), "p0");
+    await user.selectOptions(screen.getByLabelText(/目标角色/), "Alice");
+    await user.click(screen.getByRole("button", { name: "添加人物映射" }));
+    // 第二行未填 → 拦截
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("每行均须填全");
+    // 第二行填重复 id → 拦截
+    await user.type(screen.getAllByLabelText(/源人物 id/)[1], "p0");
+    await user.selectOptions(screen.getAllByLabelText(/目标角色/)[1], "Bob");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("源人物 id 不能重复");
+  });
+
+  it("swap 移除行：只剩一行时移除按钮禁用", async () => {
+    const user = userEvent.setup();
+    mockFetch(baseHandler());
+    renderPage(<TasksPage />);
+    await screen.findByRole("heading", { name: "创建任务" });
+    await user.selectOptions(screen.getByLabelText("模式"), "swap");
+    expect(screen.getByRole("button", { name: "移除" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "添加人物映射" }));
+    expect(screen.getAllByLabelText(/源人物 id/)).toHaveLength(2);
+    const removes = screen.getAllByRole("button", { name: "移除" });
+    expect(removes[0]).not.toBeDisabled();
+    await user.click(removes[1]);
+    expect(screen.getAllByLabelText(/源人物 id/)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "移除" })).toBeDisabled();
   });
 
   it("WS 快照优先于初始列表", async () => {

@@ -36,6 +36,8 @@ button.danger { background: var(--bad); }
 button:disabled { opacity: 0.5; cursor: default; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 .row > div { flex: 1; min-width: 140px; }
+.castrows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.castrows .row > button { flex: 0 0 auto; align-self: flex-end; }
 .error { color: var(--bad); margin: 8px 0; }
 .ok { color: var(--ok); margin: 8px 0; }
 .muted { color: var(--muted); }

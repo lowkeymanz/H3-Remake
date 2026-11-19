@@ -1,6 +1,6 @@
 // 页面 1 任务创建 + 任务列表（历史任务入口，需求八页面 3 的结果库列表）。
 // 创建口径与 POST /api/tasks 逐字对齐：multipart video/description/mode/budget/start/dur/cast；
-// swap 点选角色库角色自动并入 cast；参考图可选，作为所选角色的 photo 来源。
+// swap 支持多人映射：动态增删 cast 行（源人物 id + 角色库点选），每行参考图可选（作为该角色 photo）。
 
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
@@ -9,6 +9,14 @@ import { api } from "../api";
 import { useProgressState } from "../hooks";
 import { STATUS_LABEL, TERMINAL } from "../types";
 import type { CharEntry, Mode, Task } from "../types";
+
+interface CastRow {
+  sourceId: string;
+  charName: string;
+  refPhoto: File | null;
+}
+
+const emptyRow = (): CastRow => ({ sourceId: "", charName: "", refPhoto: null });
 
 export function TasksPage() {
   const navigate = useNavigate();
@@ -23,11 +31,12 @@ export function TasksPage() {
   const [budget, setBudget] = useState("");
   const [start, setStart] = useState("0");
   const [dur, setDur] = useState("");
-  const [sourceId, setSourceId] = useState("");
-  const [charName, setCharName] = useState("");
-  const [refPhoto, setRefPhoto] = useState<File | null>(null);
+  const [castRows, setCastRows] = useState<CastRow[]>([emptyRow()]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const patchRow = (index: number, patch: Partial<CastRow>) =>
+    setCastRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 
   useEffect(() => {
     api.listTasks().then(setFetched).catch(() => undefined);
@@ -48,8 +57,12 @@ export function TasksPage() {
     setError("");
     if (!video) return setError("请选择源视频");
     if (!description.trim()) return setError("请填写任务描述");
-    if (mode === "swap" && (!sourceId.trim() || !charName)) {
-      return setError("swap 任务须填写源人物 id 并点选角色库角色");
+    if (mode === "swap") {
+      if (castRows.some((row) => !row.sourceId.trim() || !row.charName)) {
+        return setError("swap 任务须填写源人物 id 并点选角色库角色（每行均须填全）");
+      }
+      const ids = castRows.map((row) => row.sourceId.trim());
+      if (new Set(ids).size !== ids.length) return setError("源人物 id 不能重复");
     }
     const form = new FormData();
     form.append("video", video);
@@ -58,12 +71,19 @@ export function TasksPage() {
     if (budget) form.append("budget", budget);
     if (start) form.append("start", start);
     if (dur) form.append("dur", dur);
-    form.append("cast", mode === "swap" ? JSON.stringify({ [sourceId.trim()]: charName }) : "{}");
+    const cast = mode === "swap"
+      ? Object.fromEntries(castRows.map((row) => [row.sourceId.trim(), row.charName]))
+      : {};
+    form.append("cast", JSON.stringify(cast));
     setBusy(true);
     try {
       const task = await api.createTask(form);
-      if (mode === "swap" && refPhoto && charName) {
-        await api.uploadPhoto(charName, refPhoto).catch(() => undefined);
+      if (mode === "swap") {
+        for (const row of castRows) {
+          if (row.refPhoto && row.charName) {
+            await api.uploadPhoto(row.charName, row.refPhoto).catch(() => undefined);
+          }
+        }
       }
       navigate(`/tasks/${task.task_id}`);
     } catch (exc) {
@@ -90,23 +110,36 @@ export function TasksPage() {
                   placeholder={mode === "edit" ? "例如：把涡轮机去掉" : "例如：把主角换成角色库角色"}
                   onChange={(e) => setDescription(e.target.value)} />
         {mode === "swap" && (
-          <div className="row">
-            <div>
-              <label htmlFor="sourceId">源人物 id（源片中的人物标识）</label>
-              <input id="sourceId" value={sourceId} onChange={(e) => setSourceId(e.target.value)} />
-            </div>
-            <div>
-              <label htmlFor="charName">目标角色（角色库点选）</label>
-              <select id="charName" value={charName} onChange={(e) => setCharName(e.target.value)}>
-                <option value="">请选择角色</option>
-                {chars.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="refPhoto">参考图（可选，作为该角色 photo）</label>
-              <input id="refPhoto" type="file" accept="image/*"
-                     onChange={(e) => setRefPhoto(e.target.files?.[0] ?? null)} />
-            </div>
+          <div className="castrows">
+            {castRows.map((row, i) => (
+              <div className="row" key={i}>
+                <div>
+                  <label htmlFor={`sourceId-${i}`}>源人物 id（源片中的人物标识）</label>
+                  <input id={`sourceId-${i}`} value={row.sourceId}
+                         onChange={(e) => patchRow(i, { sourceId: e.target.value })} />
+                </div>
+                <div>
+                  <label htmlFor={`charName-${i}`}>目标角色（角色库点选）</label>
+                  <select id={`charName-${i}`} value={row.charName}
+                          onChange={(e) => patchRow(i, { charName: e.target.value })}>
+                    <option value="">请选择角色</option>
+                    {chars.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor={`refPhoto-${i}`}>参考图（可选，作为该角色 photo）</label>
+                  <input id={`refPhoto-${i}`} type="file" accept="image/*"
+                         onChange={(e) => patchRow(i, { refPhoto: e.target.files?.[0] ?? null })} />
+                </div>
+                <button type="button" className="danger" disabled={castRows.length === 1}
+                        onClick={() => setCastRows((rows) => rows.filter((_, j) => j !== i))}>
+                  移除
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setCastRows((rows) => [...rows, emptyRow()])}>
+              添加人物映射
+            </button>
           </div>
         )}
         <div className="row">
