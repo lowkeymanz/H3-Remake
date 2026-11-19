@@ -54,6 +54,14 @@ uv run start.py
 
 Open **http://127.0.0.1:8000** and create a task: upload a source video, pick swap or edit, and describe the task in one sentence. Swap additionally needs a source-person id and a target character picked from the character library (upload character sheets there first); a reference photo is optional.
 
+By default the server binds to `127.0.0.1` (local machine only). On a cloud / remote server, launch with:
+
+```bash
+uv run start.py --host 0.0.0.0
+```
+
+then open `http://<server-ip>:8000` from your browser (allow port 8000 in the firewall / cloud security group first).
+
 Useful flags:
 
 - `uv run install.py --dry-run` — dry-run the web UI build only (stage 1); all other stages still execute
