@@ -36,7 +36,7 @@ Model and code licenses follow the respective upstream repositories — review t
 Three separate steps — environment, models, launch:
 
 ```bash
-git clone https://github.com/<your-username>/H3-Remake.git && cd H3-Remake
+git clone https://github.com/lowkeymanz/H3-Remake.git && cd H3-Remake
 
 # 1. Environment: deps, torch cu130, ComfyUI v0.42.0 + patch set,
 #    custom nodes, Hermes agent, web UI build
