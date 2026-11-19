@@ -115,9 +115,18 @@ def total_ram_gib() -> float:
             return 0.0
         return status.ullTotalPhys / 2**30
     try:
-        return os.sysconf("SCM_PAGE_SIZE") * os.sysconf("SCM_PHYS_PAGES") / 2**30
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
     except (AttributeError, OSError, ValueError):
-        return 0.0
+        pass
+    try:
+        # 容器等受限环境 sysconf 可能不可用，回落 /proc/meminfo（M6 云端实测修复）
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / 2**20  # kB → GiB
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
 
 
 class Installer:
