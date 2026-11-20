@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from PIL import Image
 
 from app.agent.hermes import AgentError, hermes_python
 from app.agent.run import edit_task_prompt, hermes_chat_command, run_edit_session
+from scripts.config import resolve_remake_home
 from scripts.fake_llm import Handler, Replay
 from scripts.fake_painter import Handler as PainterHandler, make_png
 
@@ -40,8 +42,11 @@ def _hermes_python() -> Path | None:
 
 
 HERMES_PY = _hermes_python()
-FFMPEG_DIRS = sorted(Path.home().glob(".viggle-remake/hermes/tools/ffmpeg-*/bin"))
-FFMPEG = str(FFMPEG_DIRS[-1] / "ffmpeg.exe") if FFMPEG_DIRS else None
+# 双平台口径：按宿主平台取可执行名、文件存在才算数，回落系统 PATH
+FFMPEG_DIRS = sorted(resolve_remake_home(PROJECT_ROOT).glob("hermes/tools/ffmpeg-*/bin"))
+_FFMPEG_NAME = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+FFMPEG = next((str(d / _FFMPEG_NAME) for d in reversed(FFMPEG_DIRS)
+               if (d / _FFMPEG_NAME).is_file()), None) or shutil.which("ffmpeg")
 
 EDIT_PROMPT = """subject_definitions:
 <Video 1> is the source video for the target video edit.

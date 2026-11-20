@@ -36,9 +36,10 @@ def make_root(tmp: str, *, worker_toml: str = "") -> Path:
     script.touch()
     comfy = root / "vendor/ComfyUI"
     comfy.mkdir(parents=True, exist_ok=True)
-    python = venv_python(comfy / "venv", "win32")
-    python.parent.mkdir(parents=True, exist_ok=True)
-    python.touch()
+    for platform in ("win32", "linux"):  # 双平台布局都备，测试不依赖宿主机平台
+        python = venv_python(comfy / "venv", platform)
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.touch()
     home = root / "data/home"
     (root / "config.toml").write_text(
         f"[paths]\nremake_home = \"{home.as_posix()}\"\n\n[worker]\n{worker_toml}\n"
