@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,8 +22,8 @@ from app.agent.hermes import (
 from scripts.installer import Installer, venv_python
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REAL_MCP = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv", "win32").parent \
-    / "viggle-remake-mcp.exe"
+REAL_MCP = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv").parent \
+    / ("viggle-remake-mcp.exe" if sys.platform == "win32" else "viggle-remake-mcp")
 
 SEEDED_CONFIG = """\
 # Hermes Agent CLI Configuration

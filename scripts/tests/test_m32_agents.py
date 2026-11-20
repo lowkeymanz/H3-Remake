@@ -23,11 +23,11 @@ from app.agent.workspace import (
     prepare_workspace,
 )
 from scripts.fake_llm import Handler, Replay
-from scripts.installer import Installer
+from scripts.installer import Installer, venv_python
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HERMES_TEMPLATE = PROJECT_ROOT / "vendor/hermes/cli-config.yaml.example"
-MCP_VENV_PY = PROJECT_ROOT / "vendor/viggle-remake/.venv/Scripts/python.exe"
+MCP_VENV_PY = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv")
 
 
 def _hermes_python() -> Path | None:
