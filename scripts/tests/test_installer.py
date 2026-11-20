@@ -698,5 +698,80 @@ class StageCliTests(unittest.TestCase):
         self.assertEqual(fresh.calls, [("full",)])
 
 
+def _fail(command: list[str]) -> None:
+    raise subprocess.CalledProcessError(1, command)
+
+
+class HermesQuarantineRebuildTests(unittest.TestCase):
+    """复验失败时：隔离坏 venv + 清 stale 记录 → 官方安装器重建 → 复验 → 清理隔离。"""
+
+    def _installer(self, root: Path, runner) -> Installer:
+        return Installer(root, remake_home=root / "home", platform="linux", runner=runner)
+
+    def _venv(self, installer: Installer, install_id: str, env_id: str) -> Path:
+        venv = installer.hermes_home / f"installs/{install_id}/environments/{env_id}/venv"
+        python = venv / "bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b"fake interpreter")
+        return python
+
+    def _marker(self, installer: Installer) -> None:
+        installer.hermes_source.mkdir(parents=True, exist_ok=True)
+        (installer.hermes_source / ".hermes-bootstrap-complete").write_text(
+            f'{{"pinnedCommit": "{HERMES_COMMIT}"}}', encoding="utf-8")
+        (installer.hermes_source / "scripts").mkdir(parents=True, exist_ok=True)
+        (installer.hermes_source / "scripts/install.sh").touch()
+
+    def test_quarantine_moves_broken_and_clears_stale_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            good = self._venv(installer, "aaaa", "good")
+            bad = self._venv(installer, "bbbb", "bad")
+            installer.runner = ScriptedRunner({str(bad): _fail})
+            (installer.hermes_home / "runtime-python.txt").write_text(f"{bad}\n", encoding="utf-8")
+
+            quarantined = installer.quarantine_broken_hermes_envs()
+            self.assertEqual(quarantined, [bad.parent.parent.with_name("venv.broken")])
+            self.assertTrue(good.is_file())
+            self.assertFalse(bad.exists())
+            self.assertFalse((installer.hermes_home / "runtime-python.txt").exists())
+            self.assertEqual(installer.quarantine_broken_hermes_envs(), [])  # 重入无副作用
+
+    def test_install_hermes_rebuilds_after_quarantine(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = ScriptedRunner()
+            installer = self._installer(Path(temporary), runner)
+            self._marker(installer)
+            bad = self._venv(installer, "aaaa", "bad")
+            fresh = installer.hermes_home / "installs/cccc/environments/dddd/venv/bin/python"
+
+            def rebuild(command: list[str]) -> None:
+                fresh.parent.mkdir(parents=True, exist_ok=True)
+                fresh.write_bytes(b"fake interpreter")
+
+            installer.runner = ScriptedRunner({str(bad): _fail, "bash": rebuild})
+            with patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                installer.install_hermes()
+
+            bash_calls = [call for call in installer.runner.calls if call[0] == "bash"]
+            self.assertEqual(len(bash_calls), 1)
+            self.assertEqual(bash_calls[0][bash_calls[0].index("--commit") + 1], HERMES_COMMIT)
+            self.assertFalse(bad.parent.parent.exists())
+            self.assertFalse(bad.parent.parent.with_name("venv.broken").exists())  # 成功后清理隔离
+            self.assertEqual((installer.hermes_home / "runtime-python.txt").read_text(encoding="utf-8"),
+                             f"{fresh}\n")
+
+    def test_failed_rebuild_keeps_quarantine_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._marker(installer)
+            bad = self._venv(installer, "aaaa", "bad")
+            installer.runner = ScriptedRunner({str(bad): _fail})  # bash 无副作用：重建未落位
+            with patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                with self.assertRaisesRegex(InstallError, "hermes_cli.main"):
+                    installer.install_hermes()
+            self.assertTrue(bad.parent.parent.with_name("venv.broken").exists())  # 留现场供诊断
+
+
 if __name__ == "__main__":
     unittest.main()

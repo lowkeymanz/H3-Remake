@@ -12,6 +12,7 @@ import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from app.agent.hermes import AgentError, hermes_python
 from app.agent.workspace import (
@@ -22,6 +23,7 @@ from app.agent.workspace import (
     prepare_workspace,
 )
 from scripts.fake_llm import Handler, Replay
+from scripts.installer import Installer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HERMES_TEMPLATE = PROJECT_ROOT / "vendor/hermes/cli-config.yaml.example"
@@ -248,6 +250,64 @@ class HermesInjectionTests(unittest.TestCase):
                     self.assertIn(marker, context)
             finally:
                 server.shutdown()
+
+
+class HermesPythonHealthTests(unittest.TestCase):
+    """运行时解释器逐个启动校验：坏候选不交付，全坏提示重跑阶段 7（而非存在即用）。"""
+
+    class Runner:
+        def __init__(self, broken: set[str]) -> None:
+            self.broken = broken
+            self.calls: list[list[str]] = []
+
+        def __call__(self, command, *, cwd=None, env=None, check=True):
+            normalized = [str(part) for part in command]
+            self.calls.append(normalized)
+            if normalized[0] in self.broken:
+                raise subprocess.CalledProcessError(1, normalized)
+            return subprocess.CompletedProcess(normalized, 0)
+
+    def _setup(self, root: Path, broken: set[Path]):
+        home = root / "home"
+        (root / "config.toml").write_text(
+            f'[paths]\nremake_home = "{home.as_posix()}"\n', encoding="utf-8")
+        installer = Installer(root, runner=self.Runner({str(p) for p in broken}), platform="linux")
+        return installer
+
+    def _venv(self, installer: Installer, name: str) -> Path:
+        python = installer.hermes_home / f"installs/{name}/environments/e/venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b"fake interpreter")
+        return python
+
+    def test_skips_broken_record_and_returns_healthy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer = self._setup(root, set())
+            bad = self._venv(installer, "aaaa")
+            good = self._venv(installer, "bbbb")
+            installer.runner = self.Runner({str(bad)})
+            (installer.hermes_home / "runtime-python.txt").write_text(f"{bad}\n", encoding="utf-8")
+            with patch("app.agent.hermes._installer", return_value=installer):
+                self.assertEqual(hermes_python(root), good)
+
+    def test_all_broken_raises_with_stage7_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer = self._setup(root, set())
+            bad = self._venv(installer, "aaaa")
+            installer.runner = self.Runner({str(bad)})
+            with patch("app.agent.hermes._installer", return_value=installer):
+                with self.assertRaisesRegex(AgentError, r"--stages 7"):
+                    hermes_python(root)
+
+    def test_missing_runtime_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer = self._setup(root, set())
+            with patch("app.agent.hermes._installer", return_value=installer):
+                with self.assertRaisesRegex(AgentError, "未找到"):
+                    hermes_python(root)
 
 
 if __name__ == "__main__":

@@ -317,12 +317,17 @@ def write_hermes_config(
 
 
 def hermes_python(root: Path, *, platform: str | None = None) -> Path:
-    """Hermes 运行时解释器（阶段 7 官方安装器落位）。"""
+    """Hermes 运行时解释器（阶段 7 官方安装器落位）；逐个启动校验，坏环境不交付。"""
     installer = _installer(root, platform)
     candidates = installer.hermes_runtime_candidates()
     if not candidates:
-        raise AgentError(f"未找到 Hermes 运行时（{installer.hermes_home}）；请先执行阶段 7。")
-    return candidates[0]
+        raise AgentError(f"未找到 Hermes 运行时（{installer.hermes_home}）；"
+                         "请运行 uv run install.py --stages 7。")
+    for python in candidates:
+        if installer.hermes_python_ok(python):
+            return python
+    raise AgentError(f"Hermes 运行时解释器无法启动（{candidates[0]}）；"
+                     "请运行 uv run install.py --stages 7 修复环境。")
 
 
 def hermes_command(

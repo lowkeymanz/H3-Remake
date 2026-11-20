@@ -8,6 +8,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.agent import hermes
 from app.agent.hermes import (
@@ -17,7 +18,7 @@ from app.agent.hermes import (
     mcp_server_entry,
     write_hermes_config,
 )
-from scripts.installer import venv_python
+from scripts.installer import Installer, venv_python
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REAL_MCP = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv", "win32").parent \
@@ -196,7 +197,7 @@ class HermesCommandTests(unittest.TestCase):
     def test_missing_runtime_reports_stage7(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = make_agent_root(tmp)
-            with self.assertRaisesRegex(AgentError, "阶段 7"):
+            with self.assertRaisesRegex(AgentError, r"--stages 7"):
                 hermes_command(root, platform="win32")
 
     def test_builds_driver_command_with_hermes_home(self) -> None:
@@ -206,7 +207,9 @@ class HermesCommandTests(unittest.TestCase):
             runtime.parent.mkdir(parents=True)
             runtime.write_bytes(b"")
             (root / "home/hermes/runtime-python.txt").write_text(str(runtime), encoding="utf-8")
-            command, env = hermes_command(root, ["-p", "hi"], platform="win32")
+            # 空壳假解释器过不了启动校验；本用例只验命令拼装，健康校验另行覆盖
+            with patch.object(Installer, "hermes_python_ok", return_value=True):
+                command, env = hermes_command(root, ["-p", "hi"], platform="win32")
             self.assertEqual(command, [str(runtime), "-m", "hermes_cli.main", "-p", "hi"])
             self.assertEqual(env, {"HERMES_HOME": str(root / "home/hermes")})
 
