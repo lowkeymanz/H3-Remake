@@ -154,9 +154,12 @@ export function TasksPage() {
                    onChange={(e) => setDur(e.target.value)} />
           </div>
           <div>
-            <label htmlFor="budget">预算上限（张，默认 {budgetDefault}）</label>
+            <label htmlFor="budget">绘图预算上限（次，默认 {budgetDefault}）</label>
             <input id="budget" type="number" min="1" value={budget}
                    onChange={(e) => setBudget(e.target.value)} />
+            <p className="formhint">计本任务调用云端图像生成 API 的次数（生成角色表、绘制关键帧、重绘），
+              按量付费；从角色库取表与本地 GPU 渲染不占预算。达上限后停止绘图、按已绘内容交付；
+              单人替换典型用量 2–6 次。</p>
           </div>
         </div>
         {error && <p className="error" role="alert">{error}</p>}

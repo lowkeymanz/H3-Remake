@@ -38,7 +38,7 @@ export function SettingsPage() {
     setNotice("");
     const maxImages = Number(budget);
     if (!Number.isInteger(maxImages) || maxImages < 1) {
-      return setError("预算默认值须为正整数");
+      return setError("绘图预算默认值须为正整数");
     }
     setBusy(true);
     try {
@@ -88,10 +88,11 @@ export function SettingsPage() {
         {sectionForm("LLM（多模态大模型）", llm, setLlm, settings.llm.api_key_set, "llm")}
         {sectionForm("Painter（关键帧绘制）", painter, setPainter, settings.painter.api_key_set, "painter")}
         <section className="panel">
-          <h2>预算与路径</h2>
-          <label htmlFor="budgetDefault">预算默认值（张，任务创建表单预填）</label>
+          <h2>绘图预算与路径</h2>
+          <label htmlFor="budgetDefault">绘图预算默认值（次，任务创建表单预填）</label>
           <input id="budgetDefault" type="number" min="1" value={budget}
                  onChange={(e) => setBudget(e.target.value)} />
+          <p className="formhint">即任务创建表单"绘图预算上限"的预填值，计云端图像生成 API 调用次数，不是金额。</p>
           <label>REMAKE_HOME（config.toml [paths]，只读）</label>
           <input value={settings.remake_home || "（默认 ~/.viggle-remake）"} readOnly />
         </section>

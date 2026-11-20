@@ -99,7 +99,7 @@ export function TaskDetailPage() {
       </h1>
       <p className="muted">
         {task.task_id} · {task.mode} · 第 {task.rounds} 轮
-        {task.budget !== null && ` · 预算 ${task.budget} 张`}
+        {task.budget !== null && ` · 绘图预算 ${task.budget} 次`}
       </p>
       {error && <p className="error" role="alert">{error}</p>}
       {notice && <p className="ok" role="status">{notice}</p>}
