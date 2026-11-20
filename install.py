@@ -1,4 +1,4 @@
-"""Viggle Remake 环境安装入口（不含模型）：完整安装 / --dev 开发模式 / --stages 指定阶段。
+"""H3-Remake 环境安装入口（不含模型）：完整安装 / --dev 开发模式 / --stages 指定阶段。
 模型下载为独立入口 models.py（阶段 5 编号保留，--stages 5 会提示改用 models.py）。"""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from scripts.installer import InstallError, Installer
 
 
 def main(argv: list[str] | None = None, installer: Installer | None = None) -> int:
-    parser = argparse.ArgumentParser(description="安装 Viggle Remake 环境（模型下载见 models.py）")
+    parser = argparse.ArgumentParser(description="安装 H3-Remake 环境（模型下载见 models.py）")
     parser.add_argument("--dev", action="store_true", help="零 GPU 开发模式：阶段 0/1/2/3/7/8")
     parser.add_argument("--stages", metavar="列表", help="只执行指定阶段（0-8 逗号分隔、不含 5，如 4,6；含 0 时按完整口径自检）")
     parser.add_argument("--dry-run", action="store_true", help="阶段 1 前端构建只输出计划不实际执行（模型下载预演见 models.py --dry-run）")

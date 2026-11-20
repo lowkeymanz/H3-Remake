@@ -1,4 +1,4 @@
-"""Viggle Remake 模型下载入口（与 install.py 环境部署严格分离）。
+"""H3-Remake 模型下载入口（与 install.py 环境部署严格分离）。
 
 档位由 config.toml [models].profile 决定（缺省 int8 定稿档），--profile 可临时覆盖；
 --dry-run 只校验远端清单并输出下载计划，不实际下载。依赖 install.py 阶段 4 的 ComfyUI 就绪；
@@ -19,7 +19,7 @@ from scripts.models import ModelDownloader, ModelError, PROFILES, resolve_profil
 
 
 def main(argv: list[str] | None = None, installer: Installer | None = None) -> int:
-    parser = argparse.ArgumentParser(description="下载 Viggle Remake 模型权重（环境安装见 install.py）")
+    parser = argparse.ArgumentParser(description="下载 H3-Remake 模型权重（环境安装见 install.py）")
     parser.add_argument("--profile", metavar="档位", help="模型档位（缺省读 config.toml [models].profile；--list 查看可用档位）")
     parser.add_argument("--dry-run", action="store_true", help="只校验远端清单并输出下载计划，不实际下载")
     parser.add_argument("--mirror", action="store_true",

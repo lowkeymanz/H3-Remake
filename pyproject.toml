@@ -1,7 +1,7 @@
 [project]
 name = "viggle-remake"
 version = "0.1.0"
-description = "Viggle Remake 自部署：Agent + MCP + ComfyUI worker + Web 前端"
+description = "H3-Remake 自部署：Agent + MCP + ComfyUI worker + Web 前端"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",        # 1.2 painter / 1.3 LLM 验证统一客户端

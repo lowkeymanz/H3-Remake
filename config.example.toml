@@ -1,4 +1,4 @@
-# Viggle Remake 配置模板。
+# H3-Remake 配置模板。
 # 复制为 config.toml 后按需修改（config.toml 已被 git 忽略）；install.py、models.py 与 start.py 读取 config.toml，
 # 文件缺失时按本模板默认值运行。config.toml 的生成引导属阶段 7（后续里程碑），当前可手动复制。
 

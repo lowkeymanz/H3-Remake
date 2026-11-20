@@ -1,4 +1,4 @@
-"""Viggle Remake 一键启动器（阶段 9 的服务入口，M5.4 补完）：同一进程组内
+"""H3-Remake 一键启动器（阶段 9 的服务入口，M5.4 补完）：同一进程组内
 守护 comfy_worker + 提供 Web 服务（FastAPI 后端 + agent 进程池 + 前端静态服务）。
 
 - worker 守护：worker 在 CUDA error / OOM 后主动退出，由 supervise 循环重启
@@ -127,7 +127,7 @@ def main(
     serve_fn: Callable[..., None] = serve_web,
     log: Callable[[str], None] = print,
 ) -> int:
-    parser = argparse.ArgumentParser(description="启动 Viggle Remake 服务（worker 守护 + Web）")
+    parser = argparse.ArgumentParser(description="启动 H3-Remake 服务（worker 守护 + Web）")
     parser.add_argument("--dev", action="store_true", help="零 GPU 开发模式：以协议假件替代真实 comfy_worker")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Web 监听地址（缺省 {DEFAULT_HOST}）")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Web 监听端口（缺省 {DEFAULT_PORT}）")
