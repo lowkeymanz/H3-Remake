@@ -91,7 +91,7 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
             pool.stop()
         store.close()
 
-    app = FastAPI(title="Viggle Remake", lifespan=lifespan)
+    app = FastAPI(title="H3-Remake", lifespan=lifespan)
     app.state.root, app.state.home, app.state.store = root, home, store
     app.state.bus, app.state.pool = bus, pool
 
