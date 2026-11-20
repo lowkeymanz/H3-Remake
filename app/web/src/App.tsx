@@ -14,7 +14,7 @@ export function App() {
       <BrowserRouter>
         <div className="layout">
           <header className="topbar">
-            <span className="brand">Viggle Remake</span>
+            <span className="brand">H3-Remake</span>
             <nav>
               <NavLink to="/" end>任务</NavLink>
               <NavLink to="/chars">角色库</NavLink>
@@ -32,7 +32,7 @@ export function App() {
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </main>
-          <footer className="compliance">Powered by Viggle Remake · MiniMax H3</footer>
+          <footer className="compliance">Powered by H3-Remake · MiniMax H3</footer>
         </div>
       </BrowserRouter>
     </ProgressContext.Provider>

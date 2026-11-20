@@ -87,7 +87,7 @@ describe("App", () => {
       throw new Error(`未 mock 的请求 ${url}`);
     });
     render(<App />);
-    expect(screen.getByText("Powered by Viggle Remake · MiniMax H3")).toBeInTheDocument();
+    expect(screen.getByText("Powered by H3-Remake · MiniMax H3")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "任务" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "角色库" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
