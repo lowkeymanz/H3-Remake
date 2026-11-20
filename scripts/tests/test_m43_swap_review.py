@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,7 @@ from app.agent.hermes import (AgentError, hermes_python, set_discovery_timeout,
                                set_model_fields, set_tool_search_enabled, upsert_mcp_server)
 from app.agent.run import edit_task_prompt, run_edit_session
 from scripts import defects
-from scripts.config import ConfigError, load_config
+from scripts.config import ConfigError, load_config, resolve_remake_home
 from scripts.fake_llm import Handler, Replay
 from scripts.fake_painter import Handler as PainterHandler
 from scripts.quality import video_edge_bands
@@ -51,9 +52,14 @@ def _hermes_python() -> Path | None:
 
 
 HERMES_PY = _hermes_python()
-FFMPEG_DIRS = sorted(Path.home().glob(".viggle-remake/hermes/tools/ffmpeg-*/bin"))
-FFMPEG = str(FFMPEG_DIRS[-1] / "ffmpeg.exe") if FFMPEG_DIRS else None
-FFPROBE = str(FFMPEG_DIRS[-1] / "ffprobe.exe") if FFMPEG_DIRS else None
+# 双平台口径：按宿主平台取可执行名、文件存在才算数，回落系统 PATH
+FFMPEG_DIRS = sorted(resolve_remake_home(PROJECT_ROOT).glob("hermes/tools/ffmpeg-*/bin"))
+_FFMPEG_NAME = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+_FFPROBE_NAME = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+FFMPEG = next((str(d / _FFMPEG_NAME) for d in reversed(FFMPEG_DIRS)
+               if (d / _FFMPEG_NAME).is_file()), None) or shutil.which("ffmpeg")
+FFPROBE = next((str(d / _FFPROBE_NAME) for d in reversed(FFMPEG_DIRS)
+                if (d / _FFPROBE_NAME).is_file()), None) or shutil.which("ffprobe")
 
 E2E_READY = MCP_EXE.is_file() and HERMES_PY is not None and HERMES_TEMPLATE.is_file() and bool(FFMPEG)
 
