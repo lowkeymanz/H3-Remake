@@ -538,16 +538,51 @@ class Installer:
             raise InstallError(f"Hermes 已安装提交 {pinned} 与锁定提交 {HERMES_COMMIT} 不一致。")
 
         for python in self.hermes_runtime_candidates():
-            try:
-                self.run_command(
-                    [python, "-c", "import hermes_cli.main; print('Hermes runtime OK')"],
-                    env={**os.environ, "HERMES_HOME": str(self.hermes_home)},
-                )
+            if self._hermes_import_ok(python):
                 atomic_write(self.hermes_home / "runtime-python.txt", f"{python}\n")
                 return python
-            except InstallError:
-                continue
         return None
+
+    def _hermes_import_ok(self, python: Path) -> bool:
+        try:
+            self.run_command(
+                [python, "-c", "import hermes_cli.main; print('Hermes runtime OK')"],
+                env={**os.environ, "HERMES_HOME": str(self.hermes_home)},
+            )
+            return True
+        except InstallError:
+            return False
+
+    def hermes_python_ok(self, python: Path) -> bool:
+        """启动级健康校验：解释器能进运行时即真（坏 venv 在启动即 Fatal error）。"""
+        try:
+            self.run_command([python, "-c", "pass"],
+                             env={**os.environ, "HERMES_HOME": str(self.hermes_home)})
+            return True
+        except InstallError:
+            return False
+
+    def quarantine_broken_hermes_envs(self) -> list[Path]:
+        """导入复验失败的 venv 挪边，官方安装器才会重建而非沿用坏现场；stale 记录一并清。"""
+        quarantined = []
+        for venv in sorted(self.hermes_home.glob("installs/*/environments/*/venv")):
+            python = venv_python(venv, self.platform)
+            if python.is_file() and self._hermes_import_ok(python):
+                continue
+            target = venv.with_name(venv.name + ".broken")
+            suffix = 0
+            while target.exists():
+                suffix += 1
+                target = venv.with_name(f"{venv.name}.broken{suffix}")
+            venv.rename(target)
+            quarantined.append(target)
+            self.log(f"隔离不可用 Hermes venv：{venv} → {target}")
+        recorded = self.hermes_home / "runtime-python.txt"
+        if recorded.is_file():
+            python = Path(recorded.read_text(encoding="utf-8").strip())
+            if not python.is_file() or not self._hermes_import_ok(python):
+                recorded.unlink()
+        return quarantined
 
     def hermes_installer_script(self) -> Path:
         filename = "install.ps1" if self.platform == "win32" else "install.sh"
@@ -573,7 +608,9 @@ class Installer:
 
     def install_hermes(self) -> None:
         python = self.verify_existing_hermes()
+        quarantined: list[Path] = []
         if python is None:
+            quarantined = self.quarantine_broken_hermes_envs()
             self.hermes_home.mkdir(parents=True, exist_ok=True)
             script = self.hermes_installer_script()
             env = {**os.environ, "HERMES_HOME": str(self.hermes_home)}
@@ -594,7 +631,13 @@ class Installer:
             self.run_command(command, env=env)
             python = self.verify_existing_hermes()
         if python is None:
-            raise InstallError("Hermes 安装后未找到可导入 hermes_cli.main 的 runtime venv Python。")
+            detail = "Hermes 安装后未找到可导入 hermes_cli.main 的 runtime venv Python。"
+            if quarantined:
+                detail += "不可用的旧环境已隔离保留（*.broken），可供诊断。"
+            raise InstallError(detail)
+        for directory in quarantined:
+            shutil.rmtree(directory, ignore_errors=True)
+            self.log(f"已清理隔离的坏 Hermes venv：{directory}")
         self.log(f"Hermes runtime：{python}")
         self.log("ffmpeg：" + str(self.configure_ffmpeg()))
 
