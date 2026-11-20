@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import io
+import json
 import os
 import py_compile
 import subprocess
@@ -17,6 +18,7 @@ from unittest.mock import mock_open, patch
 import install
 from scripts.installer import (
     HERMES_COMMIT,
+    HERMES_REPOSITORY,
     COMFYUI_VERSION,
     DEV_STAGES,
     FULL_STAGES,
@@ -35,12 +37,14 @@ class ScriptedRunner:
     def __init__(self, effects: dict[str, Callable[[list[str]], None]] | None = None) -> None:
         self.calls: list[list[str]] = []
         self.cwds: list[Path | None] = []
+        self.envs: list[dict[str, str] | None] = []
         self.effects = effects or {}
 
     def __call__(self, command, *, cwd=None, env=None, check=True):
         normalized = [str(part) for part in command]
         self.calls.append(normalized)
         self.cwds.append(cwd)
+        self.envs.append(env)
         effect = self.effects.get(normalized[0])
         if effect:
             effect(normalized)
@@ -771,6 +775,138 @@ class HermesQuarantineRebuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(InstallError, "hermes_cli.main"):
                     installer.install_hermes()
             self.assertTrue(bad.parent.parent.with_name("venv.broken").exists())  # 留现场供诊断
+
+
+class HermesFallbackTests(unittest.TestCase):
+    """官方路线不可用时的通用备选：uv 从锁定源码直建（同一 uv.lock、同一验收契约）。"""
+
+    def _installer(self, root: Path, runner) -> Installer:
+        return Installer(root, remake_home=root / "home", platform="linux", runner=runner)
+
+    def _source(self, installer: Installer) -> None:
+        installer.hermes_source.mkdir(parents=True, exist_ok=True)
+        (installer.hermes_source / "pyproject.toml").touch()
+        (installer.hermes_source / "uv.lock").touch()
+        (installer.hermes_source / "scripts").mkdir(parents=True, exist_ok=True)
+        (installer.hermes_source / "scripts/install.sh").touch()
+
+    def _broken_venv(self, installer: Installer) -> Path:
+        python = installer.hermes_home / "installs/aaaa/environments/bad/venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b"fake interpreter")
+        return python
+
+    def _uv_build(self, installer: Installer) -> tuple[Path, Callable[[list[str]], None]]:
+        python = installer.hermes_home / "installs/uv-fallback/environments/default/venv/bin/python"
+
+        def build(command: list[str]) -> None:
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_bytes(b"fake interpreter")
+
+        return python, build
+
+    def test_official_failure_falls_back_to_uv_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._source(installer)
+            bad = self._broken_venv(installer)
+            python, build = self._uv_build(installer)
+            installer.runner = ScriptedRunner({str(bad): _fail, "bash": _fail, "uv": build})
+            with patch.object(installer, "_git_head", return_value=HERMES_COMMIT), \
+                    patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                installer.install_hermes()
+
+            runner = installer.runner
+            uv_index = next(i for i, call in enumerate(runner.calls) if call[0] == "uv")
+            self.assertEqual(runner.calls[uv_index][:3], ["uv", "sync", "--frozen"])
+            self.assertEqual(runner.cwds[uv_index], installer.hermes_source)
+            env = runner.envs[uv_index]
+            self.assertEqual(env["UV_PROJECT_ENVIRONMENT"], str(python.parent.parent))
+            self.assertEqual(env["UV_PYTHON"], "3.14")  # 上游依赖按 python>=3.14 门控
+            self.assertEqual(env["HERMES_HOME"], str(installer.hermes_home))
+            self.assertEqual((installer.hermes_home / "runtime-python.txt").read_text(encoding="utf-8"),
+                             f"{python}\n")
+            marker = json.loads((installer.hermes_source / ".hermes-bootstrap-complete")
+                                .read_text(encoding="utf-8"))
+            self.assertEqual(marker["pinnedCommit"], HERMES_COMMIT)
+            self.assertFalse(bad.parent.parent.with_name("venv.broken").exists())  # 成功后清理隔离
+
+    def test_fallback_failure_keeps_quarantine_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._source(installer)
+            bad = self._broken_venv(installer)
+            installer.runner = ScriptedRunner({str(bad): _fail, "bash": _fail, "uv": _fail})
+            with patch.object(installer, "_git_head", return_value=HERMES_COMMIT), \
+                    patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                with self.assertRaisesRegex(InstallError, "hermes_cli.main"):
+                    installer.install_hermes()
+            self.assertTrue(bad.parent.parent.with_name("venv.broken").exists())  # 留现场供诊断
+
+    def test_fallback_pins_source_to_locked_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._source(installer)
+            python, build = self._uv_build(installer)
+            installer.runner = ScriptedRunner({"uv": build})
+            with patch.object(installer, "_git_head", return_value="0" * 40):
+                self.assertEqual(installer.install_hermes_fallback(), python)
+            git_calls = [call for call in installer.runner.calls if call[0] == "git"]
+            self.assertEqual(git_calls, [["git", "-C", str(installer.hermes_source),
+                                          "checkout", "--detach", HERMES_COMMIT]])
+
+    def test_fallback_fetches_when_commit_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._source(installer)
+            python, build = self._uv_build(installer)
+            attempts = {"n": 0}
+
+            def git(command: list[str]) -> None:
+                attempts["n"] += 1
+                if attempts["n"] == 1:  # 首次 checkout 失败（本地无此提交）→ fetch 后重试
+                    raise subprocess.CalledProcessError(1, command)
+
+            installer.runner = ScriptedRunner({"git": git, "uv": build})
+            with patch.object(installer, "_git_head", return_value="0" * 40):
+                self.assertEqual(installer.install_hermes_fallback(), python)
+            git_calls = [call for call in installer.runner.calls if call[0] == "git"]
+            self.assertEqual(git_calls, [
+                ["git", "-C", str(installer.hermes_source), "checkout", "--detach", HERMES_COMMIT],
+                ["git", "-C", str(installer.hermes_source), "fetch", "origin"],
+                ["git", "-C", str(installer.hermes_source), "checkout", "--detach", HERMES_COMMIT],
+            ])
+
+    def test_fallback_clones_missing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            python, build = self._uv_build(installer)
+
+            def clone(command: list[str]) -> None:
+                installer.hermes_source.mkdir(parents=True, exist_ok=True)
+                (installer.hermes_source / "pyproject.toml").touch()
+                (installer.hermes_source / "uv.lock").touch()
+
+            installer.runner = ScriptedRunner({"git": clone, "uv": build})
+            with patch.object(installer, "_git_head", return_value=HERMES_COMMIT):
+                self.assertEqual(installer.install_hermes_fallback(), python)
+            git_calls = [call for call in installer.runner.calls if call[0] == "git"]
+            self.assertEqual(git_calls, [["git", "clone", HERMES_REPOSITORY, str(installer.hermes_source)]])
+
+    def test_reentry_after_fallback_skips_reinstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._source(installer)
+            python, build = self._uv_build(installer)
+            installer.runner = ScriptedRunner({"bash": _fail, "uv": build})
+            with patch.object(installer, "_git_head", return_value=HERMES_COMMIT), \
+                    patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                installer.install_hermes()
+                installer.runner = ScriptedRunner()
+                installer.install_hermes()  # 标记 + 记录齐备：复验即返回，不再安装
+            self.assertEqual((installer.hermes_home / "runtime-python.txt").read_text(encoding="utf-8"),
+                             f"{python}\n")
+            self.assertFalse(any(call[0] in ("bash", "uv", "git") for call in installer.runner.calls))
 
 
 if __name__ == "__main__":
