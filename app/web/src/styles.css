@@ -41,6 +41,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .error { color: var(--bad); margin: 8px 0; }
 .ok { color: var(--ok); margin: 8px 0; }
 .muted { color: var(--muted); }
+.formhint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
 .timeline { display: flex; gap: 8px; list-style: none; padding: 0; flex-wrap: wrap; }
 .timeline li { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 16px; border: 1px solid var(--line); color: var(--muted); }
 .timeline li.done { color: var(--ok); border-color: var(--ok); }
