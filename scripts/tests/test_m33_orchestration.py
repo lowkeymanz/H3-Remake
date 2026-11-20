@@ -25,11 +25,13 @@ from PIL import Image
 from app.agent.hermes import AgentError, hermes_python
 from app.agent.run import edit_task_prompt, hermes_chat_command, run_edit_session
 from scripts.config import resolve_remake_home
+from scripts.installer import venv_python
 from scripts.fake_llm import Handler, Replay
 from scripts.fake_painter import Handler as PainterHandler, make_png
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MCP_EXE = PROJECT_ROOT / "vendor/viggle-remake/.venv/Scripts/viggle-remake-mcp.exe"
+MCP_EXE = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv").parent / (
+    "viggle-remake-mcp.exe" if sys.platform == "win32" else "viggle-remake-mcp")
 HERMES_TEMPLATE = PROJECT_ROOT / "vendor/hermes/cli-config.yaml.example"
 SID = "m33-e2e"
 

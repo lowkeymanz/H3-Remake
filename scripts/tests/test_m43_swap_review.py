@@ -35,12 +35,14 @@ from app.agent.hermes import (AgentError, hermes_python, set_discovery_timeout,
 from app.agent.run import edit_task_prompt, run_edit_session
 from scripts import defects
 from scripts.config import ConfigError, load_config, resolve_remake_home
+from scripts.installer import venv_python
 from scripts.fake_llm import Handler, Replay
 from scripts.fake_painter import Handler as PainterHandler
 from scripts.quality import video_edge_bands
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MCP_EXE = PROJECT_ROOT / "vendor/viggle-remake/.venv/Scripts/viggle-remake-mcp.exe"
+MCP_EXE = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv").parent / (
+    "viggle-remake-mcp.exe" if sys.platform == "win32" else "viggle-remake-mcp")
 HERMES_TEMPLATE = PROJECT_ROOT / "vendor/hermes/cli-config.yaml.example"
 
 

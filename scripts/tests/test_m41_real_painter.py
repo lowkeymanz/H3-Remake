@@ -38,11 +38,13 @@ from app.agent.hermes import (AgentError, hermes_python, mcp_server_env,
                                set_tool_search_enabled, upsert_mcp_server)
 from app.agent.run import edit_task_prompt, run_edit_session
 from scripts.config import Config, ConfigError, load_config, resolve_remake_home
+from scripts.installer import venv_python
 from scripts.fake_llm import Handler, Replay
 from scripts.quality import image_report, is_generated_image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MCP_EXE = PROJECT_ROOT / "vendor/viggle-remake/.venv/Scripts/viggle-remake-mcp.exe"
+MCP_EXE = venv_python(PROJECT_ROOT / "vendor/viggle-remake/.venv").parent / (
+    "viggle-remake-mcp.exe" if sys.platform == "win32" else "viggle-remake-mcp")
 HERMES_TEMPLATE = PROJECT_ROOT / "vendor/hermes/cli-config.yaml.example"
 SID = "m41-real"
 
