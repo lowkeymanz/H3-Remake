@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from app.agent.run import run_edit_session
+from app.agent.run import library_notes, run_edit_session
 from scripts.config import resolve_remake_home
 
 # result.json 的终态 status（save_result 落位）：任一终态都算 agent 已给出交付裁决，
@@ -64,6 +64,7 @@ def resume_task_prompt(
     edit: str | None = None,
     cast: dict[str, str] | None = None,
     budget: int | None = None,
+    chars_dir: Path | None = None,
 ) -> str:
     """会话恢复提示：令 agent 先调 status 恢复现场，不重做已完成步骤，续跑到交付。
 
@@ -78,6 +79,8 @@ def resume_task_prompt(
         lines.append(f"Edit: {edit}")
     if cast is not None:
         lines.append("Cast: " + ", ".join(f"{who} -> {whom}" for who, whom in cast.items()))
+        if chars_dir is not None:
+            lines.extend(library_notes(cast, chars_dir))
     if budget is not None:
         lines.append(f"Image-call budget for this session: {budget}.")
     lines.append(

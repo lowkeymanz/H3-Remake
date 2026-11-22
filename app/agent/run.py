@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -17,6 +18,39 @@ from typing import Callable, Sequence
 from app.agent.hermes import hermes_command
 from app.agent.workspace import prepare_workspace
 from scripts.config import resolve_remake_home
+
+
+def library_notes(cast: dict[str, str], chars_dir: Path) -> list[str]:
+    """cast 目标在角色库的落位清单：逐角色点名 sheet(source="lib") 与库描述。
+
+    只给 cast 行时弱模型会照源人物外观自造角色（sheet(source="text")），替换形同未换；
+    库信息随提示直达，不依赖 agent 自行发现 $REMAKE_HOME/chars。
+    """
+    chars_dir = Path(chars_dir)
+    lib: dict = {}
+    for path in sorted(chars_dir.glob("lib_*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            lib.setdefault("chars", {}).update(data.get("chars") or {})
+            lib.setdefault("outfits", {}).update(data.get("outfits") or {})
+    notes = []
+    for name in dict.fromkeys(cast.values()):
+        if not (chars_dir / f"{name}_sheet.png").is_file():
+            continue
+        photo = ", photo" if (chars_dir / f"{name}_photo.png").is_file() else ""
+        note = (f"Character library: {name} is in the operator's library "
+                f"($REMAKE_HOME/chars/{name}_sheet.png{photo}). Use sheet(source=\"lib\") for {name}; "
+                f"do NOT invent or redraw this character.")
+        desc, outfit = lib.get("chars", {}).get(name), lib.get("outfits", {}).get(name)
+        if desc:
+            note += f" Library description: {desc}"
+        if outfit:
+            note += f" Outfit: {outfit}"
+        notes.append(note)
+    return notes
 
 
 def edit_task_prompt(
@@ -29,11 +63,12 @@ def edit_task_prompt(
     edit: str | None = None,
     cast: dict[str, str] | None = None,
     budget: int | None = None,
+    chars_dir: Path | None = None,
 ) -> str:
     """按原项目任务口径组装驱动提示（AGENTS.md：任务给 sid、kind、源片段、cast/edit、预算）。
 
     edit 会话传 edit 句子；swap 会话传 cast 映射（源人 id -> 替换角色）。budget 缺省
-    不写（用 MCP 侧 REMAKE_MAX_IMAGES 默认）。
+    不写（用 MCP 侧 REMAKE_MAX_IMAGES 默认）。chars_dir 给出时附角色库落位清单。
     """
     span = f"[{start:g}, {start + dur:g})" if dur is not None else "the whole clip"
     lines = [f"Session id: {sid}. Kind: {kind}.",
@@ -42,6 +77,8 @@ def edit_task_prompt(
         lines.append(f"Edit: {edit}")
     if cast is not None:
         lines.append("Cast: " + ", ".join(f"{who} -> {whom}" for who, whom in cast.items()))
+        if chars_dir is not None:
+            lines.extend(library_notes(cast, chars_dir))
     if budget is not None:
         lines.append(f"Image-call budget for this session: {budget}.")
     lines.append("Run the whole job now, unattended: decide, do, and deliver result.json.")

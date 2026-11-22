@@ -109,6 +109,19 @@ class PromptForTests(unittest.TestCase):
         self.assertIn("This session was interrupted", prompt_for(task, status="interrupted"))
         self.assertNotIn("This session was interrupted", prompt_for(task, status="created"))
 
+    def test_chars_dir_wires_library_notes_into_first_and_resume(self) -> None:
+        """首轮/恢复轮附角色库落位清单；反馈轮沿用已有 sheet 不附。"""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+            chars = Path(temporary)
+            (chars / "Vela_sheet.png").write_bytes(b"sheet")
+            task = _task("t1", mode="swap", cast={"P1": "Vela"})
+            self.assertIn('sheet(source="lib") for Vela', prompt_for(task, chars_dir=chars))
+            self.assertIn('sheet(source="lib") for Vela',
+                          prompt_for(task, status="interrupted", chars_dir=chars))
+            feedback = _task("t1", mode="swap", cast={"P1": "Vela"}, rounds=2,
+                             feedback=[{"text": "again", "windows": [0]}])
+            self.assertNotIn("Character library:", prompt_for(feedback, chars_dir=chars))
+
 
 # ── AgentPool 单测（注入进程内假驱动，零子进程）─────────────────────────────
 class PoolUnitTests(unittest.TestCase):

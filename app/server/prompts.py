@@ -14,11 +14,14 @@ from app.agent.watchdog import result_status
 from app.server.store import Task
 
 
-def task_prompt(task: Task) -> str:
-    """任务表 → 驱动提示（M3.3 任务口径：edit 传句子、swap 传 cast）。"""
+def task_prompt(task: Task, *, chars_dir: Path | None = None) -> str:
+    """任务表 → 驱动提示（M3.3 任务口径：edit 传句子、swap 传 cast）。
+
+    chars_dir 给出时 swap 提示附角色库落位清单，防 agent 自造库中已有角色。
+    """
     return edit_task_prompt(task.task_id, task.src, kind=task.mode, start=task.start_s,
                             dur=task.dur_s, edit=task.description if task.mode == "edit" else None,
-                            cast=task.cast or None, budget=task.budget)
+                            cast=task.cast or None, budget=task.budget, chars_dir=chars_dir)
 
 
 def followup_prompt(task: Task) -> str:

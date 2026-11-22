@@ -109,6 +109,15 @@ class ResumePromptTests(unittest.TestCase):
         self.assertIn("Edit: remove the ball", prompt)
         self.assertIn("Kind: edit.", prompt)
 
+    def test_resume_prompt_carries_library_notes(self) -> None:
+        """中断续跑同样附角色库清单：首轮的 sheet 若自造错了，恢复轮仍有机会纠偏。"""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+            chars = Path(temporary)
+            (chars / "Vela_sheet.png").write_bytes(b"sheet")
+            prompt = resume_task_prompt(SID, "a.mp4", kind="swap", cast={"P1": "Vela"}, chars_dir=chars)
+            self.assertIn('sheet(source="lib") for Vela', prompt)
+            self.assertIn("do NOT invent or redraw", prompt)
+
 
 # ── 看门狗循环单测（注入假 drive，零费）──────────────────────────────────────
 class WatchdogLoopTests(unittest.TestCase):

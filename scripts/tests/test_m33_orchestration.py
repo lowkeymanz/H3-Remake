@@ -23,7 +23,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.agent.hermes import AgentError, hermes_python
-from app.agent.run import edit_task_prompt, hermes_chat_command, run_edit_session
+from app.agent.run import edit_task_prompt, hermes_chat_command, library_notes, run_edit_session
 from scripts.config import resolve_remake_home
 from scripts.installer import venv_python
 from scripts.fake_llm import Handler, Replay
@@ -92,6 +92,32 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Cast: P1 -> Vela, P2 -> none", prompt)
         self.assertNotIn("budget", prompt)
         self.assertNotIn("Edit:", prompt)
+
+    def test_library_notes_name_lib_sheet_and_description(self) -> None:
+        """库中已有的 cast 目标逐角色点名 sheet(source="lib") 与库描述，防 agent 自造角色。"""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+            chars = Path(temporary)
+            (chars / "Pete_sheet.png").write_bytes(b"sheet")
+            (chars / "Pete_photo.png").write_bytes(b"photo")
+            (chars / "lib_chars.json").write_text(json.dumps(
+                {"chars": {"Pete": "a pineapple mascot"}, "outfits": {"Pete": "yellow bodysuit"}}),
+                encoding="utf-8")
+            notes = library_notes({"P1": "Pete", "P2": "Pete", "P3": "Absent"}, chars)
+            self.assertEqual(len(notes), 1)  # 去重；不在库的目标不附注
+            self.assertIn('sheet(source="lib") for Pete', notes[0])
+            self.assertIn("do NOT invent or redraw", notes[0])
+            self.assertIn("Pete_sheet.png, photo", notes[0])
+            self.assertIn("a pineapple mascot", notes[0])
+            self.assertIn("yellow bodysuit", notes[0])
+
+    def test_swap_prompt_carries_library_notes(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+            chars = Path(temporary)
+            (chars / "Vela_sheet.png").write_bytes(b"sheet")
+            prompt = edit_task_prompt(SID, "a.mp4", kind="swap", cast={"P1": "Vela"}, chars_dir=chars)
+            self.assertIn('sheet(source="lib") for Vela', prompt)
+            without = edit_task_prompt(SID, "a.mp4", kind="swap", cast={"P1": "Vela"})
+            self.assertNotIn("Character library:", without)  # 未给 chars_dir 口径不变
 
 
 @unittest.skipUnless(HERMES_PY is not None, "未安装 Hermes 运行时（阶段 7）")

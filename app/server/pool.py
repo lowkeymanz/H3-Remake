@@ -65,18 +65,19 @@ class EventBus:
                 subscriber.put_nowait(event)
 
 
-def prompt_for(task: Task, *, status: str | None = None) -> str:
+def prompt_for(task: Task, *, status: str | None = None, chars_dir: Path | None = None) -> str:
     """按任务态选驱动提示：created 首轮/反馈轮、interrupted 恢复轮（M4.4 口径）。
 
     status 传入领取前的状态（dispatcher 已把任务拨 running，提示选择须凭原态）。
+    chars_dir 给出时首轮/恢复轮附角色库落位清单（反馈轮沿用已有 sheet，不附）。
     """
     if (status or task.status) == "interrupted":
         return resume_task_prompt(task.task_id, task.src, kind=task.mode, start=task.start_s,
                                   dur=task.dur_s, edit=task.description if task.mode == "edit" else None,
-                                  cast=task.cast or None, budget=task.budget)
+                                  cast=task.cast or None, budget=task.budget, chars_dir=chars_dir)
     if task.rounds > 1:
         return followup_prompt(task)
-    return task_prompt(task)
+    return task_prompt(task, chars_dir=chars_dir)
 
 
 class AgentPool:
@@ -158,10 +159,11 @@ class AgentPool:
         session_dir = self.home / "sessions" / task_id
         try:
             task = self.store.get(task_id)
-            prompt = prompt_for(task, status=picked_status)
+            chars_dir = self.home / "chars"
+            prompt = prompt_for(task, status=picked_status, chars_dir=chars_dir)
             resume = resume_task_prompt(task.task_id, task.src, kind=task.mode, start=task.start_s,
                                         dur=task.dur_s, edit=task.description if task.mode == "edit" else None,
-                                        cast=task.cast or None, budget=task.budget)
+                                        cast=task.cast or None, budget=task.budget, chars_dir=chars_dir)
             self.bus.publish({"type": "task_status", "task_id": task_id, "status": "running",
                               "rounds": task.rounds})
             self._log_line(task_id, f"[pool] 领取任务（rounds={task.rounds}，提示 {len(prompt)} 字符）。")
