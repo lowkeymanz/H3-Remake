@@ -1,4 +1,4 @@
-"""渲染基线测量（M2.4 本地开发，M6 云端 4090 48G 执行；本地以 fake_comfy_worker 验证同一套逻辑）。
+"""渲染基线测量（本地以 fake_comfy_worker 验证同一套逻辑）。
 
 向 $REMAKE_HOME/queue 投 draft(832x480) / final(1280x736) 各档任务（队列协议与真实
 worker 完全一致），逐任务：
@@ -194,7 +194,7 @@ def wait_result(home: Path, name: str, *, timeout: float, sample_every: float,
 def render_report(
     rows: list[dict[str, Any]], *, config: Config, meta: dict[str, Any], out: Path,
 ) -> None:
-    """markdown 数据表 + 同名 .json 明细（增量字段供 M6 汇总复用）。"""
+    """markdown 数据表 + 同名 .json 明细（增量字段供汇总复用）。"""
     gpu = meta["gpu"]
     lines = [
         "# 渲染基线数据表（4090 48G）",

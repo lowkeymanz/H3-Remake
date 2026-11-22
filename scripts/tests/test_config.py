@@ -130,7 +130,7 @@ class ApiSectionConfigTests(unittest.TestCase):
 
 
 class AgentConfigTests(unittest.TestCase):
-    """[agent].round_timeout（M6 云端前置加固）：真渲染会话小时级，缺省 7200s。"""
+    """[agent].round_timeout：真渲染会话小时级，缺省 7200s。"""
 
     def test_round_timeout_default(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

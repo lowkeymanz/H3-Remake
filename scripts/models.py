@@ -172,7 +172,7 @@ class ModelDownloader:
         """以 Range 请求取远端文件精确大小并核对清单；大小不符即报错（不下载）。
 
         重定向（hf-mirror→hf.co→CDN）由 urllib 自动跟随且保留 Range 头；
-        镜像网关瞬时故障（502/超时等）按指数退避重试（M6 云端实测 502）。
+        镜像网关瞬时故障（502/超时等）按指数退避重试。
         """
         url = f"{self.hf_endpoint()}/{spec.repo}/resolve/main/{spec.path}"
         last_error: Exception | None = None

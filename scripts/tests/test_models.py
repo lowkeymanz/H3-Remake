@@ -204,7 +204,7 @@ class DownloadTests(unittest.TestCase):
 
 
 class RemoteProbeTests(unittest.TestCase):
-    """M6 云端实测：hf-mirror 网关瞬时 502；校验须指数退避重试而非固定短间隔 3 次即放弃。"""
+    """镜像网关瞬时 502：校验须指数退避重试而非固定短间隔 3 次即放弃。"""
 
     def make_downloader(self, tmp: str) -> ModelDownloader:
         comfy = Path(tmp) / "vendor/ComfyUI"

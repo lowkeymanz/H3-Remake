@@ -481,7 +481,7 @@ class PoolE2eTests(unittest.TestCase):
         self.assertIn("do NOT redo completed steps", self.drive.prompts[tid][0])
 
 
-# ── [agent].round_timeout 接线（M6 云端前置加固）──────────────────────────
+# ── [agent].round_timeout 接线 ──────────────────────────────────────
 class PoolTimeoutWiringTests(unittest.TestCase):
     """单轮超时缺省读 config，显式注入优先，并真实送进 run_with_watchdog。"""
 

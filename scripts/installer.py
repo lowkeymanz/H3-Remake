@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import urllib.request
 from pathlib import Path
 from typing import Callable, Sequence
@@ -17,7 +16,6 @@ from typing import Callable, Sequence
 from scripts.config import Config, ConfigError, load_config, resolve_remake_home
 
 HERMES_COMMIT = "ae2a81ccc00e9b7c06301523e5bb09608397149c"
-HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
 
 COMFYUI_TAG = "v0.42.0"
 COMFYUI_VERSION = "0.42.0"
@@ -120,7 +118,7 @@ def total_ram_gib() -> float:
     except (AttributeError, OSError, ValueError):
         pass
     try:
-        # 容器等受限环境 sysconf 可能不可用，回落 /proc/meminfo（M6 云端实测修复）
+        # 容器等受限环境 sysconf 可能不可用，回落 /proc/meminfo
         with open("/proc/meminfo", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("MemTotal:"):
@@ -430,7 +428,7 @@ class Installer:
 
         该包仅供 ComfyUI Web UI 模板画廊（frontend_management 内 try/except ImportError 软依赖），
         worker 以库导入渲染不经过该路径；其锁定的 media-assets 依赖已从 PyPI 消失，
-        原样安装必然解析失败（M6 云端阶段 4 实测），故过滤后安装。
+        原样安装必然解析失败，故过滤后安装。
         """
         original = comfy / "requirements.txt"
         lines = original.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -613,17 +611,10 @@ class Installer:
         if python is None:
             quarantined = self.quarantine_broken_hermes_envs()
             self.hermes_home.mkdir(parents=True, exist_ok=True)
-            try:
-                self._install_hermes_official()
-            except InstallError as exc:
-                self.log(f"Hermes 官方安装路线失败：{exc}")
+            self._install_hermes_official()
             python = self.verify_existing_hermes()
-            if python is None:
-                self.log("官方路线未产出可用运行时；改用通用备选路线（uv 从锁定源码直建）。")
-                quarantined += self.quarantine_broken_hermes_envs()
-                python = self.install_hermes_fallback()
         if python is None:
-            detail = ("Hermes 安装失败：官方路线与 uv 备选路线均未产出"
+            detail = ("Hermes 安装失败：官方安装器未产出"
                       "可导入 hermes_cli.main 的 runtime venv Python。")
             if quarantined:
                 detail += "不可用的旧环境已隔离保留（*.broken），可供诊断。"
@@ -636,7 +627,17 @@ class Installer:
 
     def _install_hermes_official(self) -> None:
         script = self.hermes_installer_script()
-        env = {**os.environ, "HERMES_HOME": str(self.hermes_home)}
+        # Hermes 运行时存储（私有 uv + 托管 Python 3.14）默认落 $HERMES_HOME/tools，容器实例的
+        # 临时可写层重启/迁移即被清，venv 底座悬空致 encodings 崩。钉到项目持久树：
+        # PM store_root() 认 HERMES_RUNTIME_DIR，bootstrap 的 uv python install 认
+        # UV_PYTHON_INSTALL_DIR，两者同指持久路径，3.14 底座遂随实例生命周期存活。
+        runtime_dir = self.vendor / "hermes-runtime"
+        env = {
+            **os.environ,
+            "HERMES_HOME": str(self.hermes_home),
+            "HERMES_RUNTIME_DIR": str(runtime_dir),
+            "UV_PYTHON_INSTALL_DIR": str(runtime_dir),
+        }
         if self.platform == "win32":
             shell = shutil.which("powershell") or shutil.which("pwsh")
             if not shell:
@@ -653,58 +654,6 @@ class Installer:
             ]
         self.run_command(command, env=env)
 
-    def _git_head(self, source: Path) -> str | None:
-        try:
-            result = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"],
-                                    capture_output=True, text=True, timeout=30, check=False)
-        except OSError:
-            return None
-        return result.stdout.strip() if result.returncode == 0 else None
-
-    def install_hermes_fallback(self) -> Path | None:
-        """通用备选路线：uv 管理的 Python 从锁定提交源码直建运行时（绕开官方 PM 工具链）。
-
-        官方路线依赖 PM 的可迁移工具链，在部分容器/存储环境不可用（引导解释器正常、
-        其构建的 tools python 启动即失败）；本路线用同一份 uv.lock 装进标准 venv，
-        验收契约与官方一致（import hermes_cli.main）。上游依赖按 python>=3.14 门控，
-        故 UV_PYTHON 钉住 3.14（uv 自动供给受管解释器，不依赖宿主系统 Python）。
-        """
-        source = self.hermes_source
-        venv = self.hermes_home / "installs/uv-fallback/environments/default/venv"
-        python = venv_python(venv, self.platform)
-        try:
-            if not (source / "pyproject.toml").is_file() or not (source / "uv.lock").is_file():
-                if source.exists():
-                    raise InstallError(f"Hermes 源码不完整（缺 pyproject.toml/uv.lock）：{source}")
-                self.run_command(["git", "clone", HERMES_REPOSITORY, source])
-            if self._git_head(source) != HERMES_COMMIT:
-                try:
-                    self.run_command(["git", "-C", source, "checkout", "--detach", HERMES_COMMIT])
-                except InstallError:
-                    self.run_command(["git", "-C", source, "fetch", "origin"])
-                    self.run_command(["git", "-C", source, "checkout", "--detach", HERMES_COMMIT])
-            self.run_command(["uv", "sync", "--frozen", "--no-dev"], cwd=source, env={
-                **os.environ,
-                "HERMES_HOME": str(self.hermes_home),
-                "UV_PROJECT_ENVIRONMENT": str(venv),
-                "UV_PYTHON": "3.14",
-                "UV_HTTP_TIMEOUT": "600",
-            })
-            if not python.is_file() or not self._hermes_import_ok(python):
-                raise InstallError(f"备选路线运行时校验失败：{python}")
-        except InstallError as exc:
-            self.log(f"Hermes 备选路线（uv 直建）失败：{exc}")
-            return None
-        atomic_write(self.hermes_home / "runtime-python.txt", f"{python}\n")
-        atomic_write(source / ".hermes-bootstrap-complete", json.dumps({
-            "schemaVersion": 1,
-            "pinnedCommit": HERMES_COMMIT,
-            "pinnedBranch": "main",
-            "completedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
-        }, indent=2) + "\n")
-        self.log(f"Hermes 备选路线就绪：{python}")
-        return python
-
     def configure_ffmpeg(self) -> Path:
         candidates: list[Path] = []
         ffmpeg = shutil.which("ffmpeg")
@@ -712,6 +661,8 @@ class Installer:
         if ffmpeg and ffprobe and Path(ffmpeg).parent == Path(ffprobe).parent:
             candidates.append(Path(ffmpeg).parent)
         candidates.extend(sorted(self.hermes_home.glob("tools/ffmpeg-*/bin")))
+        # PM 的 ffmpeg 随运行时存储落在 vendor/hermes-runtime；旧落点保留兼容存量安装。
+        candidates.extend(sorted((self.vendor / "hermes-runtime").glob("ffmpeg-*/bin")))
 
         for directory in dict.fromkeys(candidates):
             executable = directory / ("ffmpeg.exe" if self.platform == "win32" else "ffmpeg")
