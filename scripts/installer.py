@@ -612,6 +612,83 @@ class Installer:
             self.log(f"隔离不可用托管 Python：{entry} → {target}")
         return quarantined
 
+    def _materialize_venv_base(self, venv: Path) -> list[Path]:
+        """把 venv 底座解释器中指向运行树之外的符号链接条目还原为真实文件。
+
+        解释器启动时按二进制的真实路径向上定位标准库，底座条目被运行树外的
+        符号链接顶替后即失效；以同内容真实拷贝还原原位即恢复。其余文件按
+        绝对路径加载，不受符号链接影响。
+        """
+        config = venv / "pyvenv.cfg"
+        if not config.is_file():
+            return []
+        home: Path | None = None
+        version = ""
+        for line in config.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if not sep:
+                continue
+            key, value = key.strip(), value.strip()
+            if key == "home":
+                home = Path(value).expanduser()
+            elif key == "version_info":
+                version = value
+        if home is None:
+            return []
+        if not home.is_absolute():
+            home = venv / home
+        minor = ".".join(version.split(".")[:2])
+        if self.platform == "win32":
+            names = ["python.exe"]
+        else:
+            names = list(dict.fromkeys(["python3", "python", f"python{minor}"]))
+        runtime_root = (self.vendor / "hermes-runtime").resolve()
+        repaired: list[Path] = []
+        for name in names:
+            entry = home / name
+            if not entry.is_symlink():
+                continue
+            target = entry.resolve(strict=False)
+            if not target.is_file() or target.is_relative_to(runtime_root):
+                continue
+            temporary = entry.with_name(f".{entry.name}.materialize-tmp")
+            shutil.copy2(target, temporary)
+            os.chmod(temporary, 0o755)
+            os.replace(temporary, entry)
+            repaired.append(entry)
+        return repaired
+
+    def heal_hermes_runtime(self) -> Path | None:
+        """Hermes 运行时快速自愈：不可启动的 venv 还原底座解释器后复验，成功返回可用解释器。"""
+        healed: Path | None = None
+        for venv in sorted(self.hermes_home.glob("installs/*/environments/*/venv")):
+            python = venv_python(venv, self.platform)
+            if not python.is_file():
+                continue
+            if self._hermes_import_ok(python):
+                healed = healed or python
+                continue
+            self._materialize_venv_base(venv)
+            if python.is_file() and self._hermes_import_ok(python):
+                atomic_write(self.hermes_home / "runtime-python.txt", f"{python}\n")
+                self.log("Hermes 运行时已自动修复。")
+                healed = healed or python
+        return healed
+
+    def ensure_hermes_runtime(self) -> Path | None:
+        """启动自检：可用即返回；失效先快速自愈；自愈无效且已安装过则重装；未安装返回 None。"""
+        python = self.verify_existing_hermes()
+        if python is not None:
+            return python
+        if not (self.hermes_source / ".hermes-bootstrap-complete").is_file():
+            return None
+        healed = self.heal_hermes_runtime()
+        if healed is not None:
+            return healed
+        self.log("Hermes 运行时无法快速恢复，正在重装。")
+        self.install_hermes()
+        return self.verify_existing_hermes()
+
     def hermes_installer_script(self) -> Path:
         filename = "install.ps1" if self.platform == "win32" else "install.sh"
         existing = self.hermes_source / "scripts" / filename

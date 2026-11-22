@@ -13,6 +13,7 @@
 启动预检：空 api_key/base_url 直接报错不拉起（避免任务领取后才发现缺配）；
 ffmpeg ≥5.1 解析（PATH 或 Hermes 工具目录）并注入本进程 PATH——agent 子进程继承，
 不依赖安装器进程的临时 PATH；非 --dev 缺 ffmpeg 报错，--dev 仅警告。
+Hermes 运行时启动自检：失效自动修复（快速还原无效则重装），无需人工介入。
 拉起前把 config.toml 归一写入 Hermes config.yaml/.env（model 三键 + MCP 注册 + 密钥配对）：
 缺这一步 Hermes 会用出厂默认模型与端点，且没有 viggle-remake 工具可用。
 
@@ -59,6 +60,16 @@ def ensure_ffmpeg(root: Path) -> Path | None:
         return Installer(root).configure_ffmpeg()
     except InstallError:
         return None
+
+
+def ensure_hermes_runtime(root: Path, *, log: Callable[[str], None] = print) -> None:
+    """Hermes 运行时启动自检（幂等）：失效自动修复；未安装时不在此报错，交后续注册提示。"""
+    try:
+        python = Installer(root).ensure_hermes_runtime()
+    except InstallError as exc:
+        raise AgentError(str(exc)) from exc
+    if python is not None:
+        log(f"[start] Hermes 运行时就绪：{python}")
 
 
 def worker_command(
@@ -158,10 +169,12 @@ def main(
         print("[start] 未找到 ffmpeg/ffprobe ≥5.1：请先运行 install.py（阶段 7 会安装）或将其加入 PATH。",
               file=sys.stderr)
         return 1
-    # Hermes 注册（幂等外科手术写入）：model 三键 + MCP 注册 + .env 密钥配对以 config.toml 为准。
+    # Hermes 运行时自检（失效自动修复）+ 注册（幂等外科手术写入）：
+    # model 三键 + MCP 注册 + .env 密钥配对以 config.toml 为准。
     try:
+        ensure_hermes_runtime(root, log=log)
         write_hermes_config(root, config=config, log=log)
-    except AgentError as exc:
+    except (AgentError, InstallError) as exc:
         print(f"[start] {exc}", file=sys.stderr)
         return 1
     log(f"[start] 守护进程启动：{' '.join(command)}")

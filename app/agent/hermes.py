@@ -326,6 +326,9 @@ def hermes_python(root: Path, *, platform: str | None = None) -> Path:
     for python in candidates:
         if installer.hermes_python_ok(python):
             return python
+    healed = installer.heal_hermes_runtime()
+    if healed is not None:
+        return healed
     raise AgentError(f"Hermes 运行时解释器无法启动（{candidates[0]}）；"
                      "请运行 uv run install.py --stages 7 修复环境。")
 

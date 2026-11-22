@@ -207,6 +207,123 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("ValueError: injected failure", errors.getvalue())
 
 
+class _EscapedInterpreterRunner:
+    """底座解释器真实路径逸出运行树即失败的假 runner（模拟解释器自定位失效）。"""
+
+    def __init__(self, runtime: Path) -> None:
+        self.calls: list[list[str]] = []
+        self._runtime = runtime
+
+    def __call__(self, command, *, cwd=None, env=None, check=True):
+        normalized = [str(part) for part in command]
+        self.calls.append(normalized)
+        if not Path(normalized[0]).resolve().is_relative_to(self._runtime):
+            raise subprocess.CalledProcessError(1, normalized)
+        return subprocess.CompletedProcess(normalized, 0)
+
+
+class HermesRuntimeHealTests(unittest.TestCase):
+    """Hermes 运行时自愈：底座解释器被运行树外符号链接顶替时还原为真实文件。"""
+
+    def _symlink(self, link: Path, target: Path) -> None:
+        try:
+            link.symlink_to(target)
+        except OSError:
+            self.skipTest("当前环境无法创建符号链接")
+
+    def _broken_runtime(self, root: Path) -> tuple[Installer, Path, Path]:
+        home = root / "home"
+        base_bin = root / "vendor" / "hermes-runtime" / "python-3.14.9" / "bin"
+        pool = root / "pool"
+        base_bin.mkdir(parents=True)
+        pool.mkdir()
+        (pool / "python-binary").write_bytes(b"fake-interpreter")
+        for name in ("python3", "python3.14"):
+            self._symlink(base_bin / name, pool / "python-binary")
+        venv = home / "hermes" / "installs" / "key" / "environments" / "gen" / "venv"
+        (venv / "bin").mkdir(parents=True)
+        self._symlink(venv / "bin" / "python", base_bin / "python3.14")
+        (venv / "pyvenv.cfg").write_text(
+            f"home = {base_bin.as_posix()}\n"
+            "implementation = CPython\nversion_info = 3.14.9\nrelocatable = true\n",
+            encoding="utf-8")
+        runner = _EscapedInterpreterRunner((root / "vendor" / "hermes-runtime").resolve())
+        installer = Installer(root, runner=runner, platform="linux", remake_home=home)
+        return installer, venv, base_bin
+
+    def test_heal_restores_escaped_base_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer, venv, base_bin = self._broken_runtime(root)
+            python = venv_python(venv, "linux")
+            self.assertFalse(installer.hermes_python_ok(python))
+            healed = installer.heal_hermes_runtime()
+            self.assertEqual(healed, python)
+            materialized = base_bin / "python3.14"
+            self.assertFalse(materialized.is_symlink())
+            self.assertEqual(materialized.read_bytes(), b"fake-interpreter")
+            recorded = Path((installer.hermes_home / "runtime-python.txt")
+                            .read_text(encoding="utf-8").strip())
+            self.assertEqual(recorded, python)
+            self.assertTrue(installer.hermes_python_ok(python))
+
+    def test_heal_keeps_in_tree_symlinks_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_bin = root / "vendor" / "hermes-runtime" / "python-3.14.9" / "bin"
+            base_bin.mkdir(parents=True)
+            (base_bin / "python3.14").write_bytes(b"real-interpreter")
+            self._symlink(base_bin / "python3", base_bin / "python3.14")
+            venv = root / "home" / "hermes" / "installs" / "key" / "environments" / "gen" / "venv"
+            (venv / "bin").mkdir(parents=True)
+            self._symlink(venv / "bin" / "python", base_bin / "python3.14")
+            (venv / "pyvenv.cfg").write_text(
+                f"home = {base_bin.as_posix()}\n"
+                "implementation = CPython\nversion_info = 3.14.9\nrelocatable = true\n",
+                encoding="utf-8")
+            runner = _EscapedInterpreterRunner((root / "vendor" / "hermes-runtime").resolve())
+            installer = Installer(root, runner=runner, platform="linux",
+                                  remake_home=root / "home")
+            self.assertEqual(installer.heal_hermes_runtime(), venv_python(venv, "linux"))
+            self.assertTrue((base_bin / "python3").is_symlink())
+            self.assertEqual((base_bin / "python3.14").read_bytes(), b"real-interpreter")
+
+    def test_heal_returns_none_for_dangling_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            base_bin = root / "vendor" / "hermes-runtime" / "python-3.14.9" / "bin"
+            base_bin.mkdir(parents=True)
+            self._symlink(base_bin / "python3.14", root / "pool" / "missing")
+            venv = home / "hermes" / "installs" / "key" / "environments" / "gen" / "venv"
+            (venv / "bin").mkdir(parents=True)
+            self._symlink(venv / "bin" / "python", base_bin / "python3.14")
+            (venv / "pyvenv.cfg").write_text(
+                f"home = {base_bin.as_posix()}\n"
+                "implementation = CPython\nversion_info = 3.14.9\nrelocatable = true\n",
+                encoding="utf-8")
+            installer = Installer(root, runner=_EscapedInterpreterRunner(
+                (root / "vendor" / "hermes-runtime").resolve()),
+                platform="linux", remake_home=home)
+            self.assertIsNone(installer.heal_hermes_runtime())
+
+    def test_ensure_returns_none_when_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = Installer(Path(temporary), remake_home=Path(temporary) / "home")
+            self.assertIsNone(installer.ensure_hermes_runtime())
+
+    def test_ensure_heals_installed_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer, venv, _ = self._broken_runtime(root)
+            installer.hermes_source.mkdir(parents=True)
+            (installer.hermes_source / ".hermes-bootstrap-complete").write_text(
+                f'{{"pinnedCommit": "{HERMES_COMMIT}"}}', encoding="utf-8")
+            self.assertEqual(installer.ensure_hermes_runtime(), venv_python(venv, "linux"))
+            self.assertFalse(any(call[0] in ("bash", "powershell", "pwsh")
+                                 for call in installer.runner.calls))
+
+
 class RemakeWorkerPatchTests(unittest.TestCase):
     """remake_worker.py Windows 兼容补丁（成品双平台口径）：幂等/形状校验/helper 双分支/真源码编译。"""
 
