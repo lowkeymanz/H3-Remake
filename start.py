@@ -10,9 +10,11 @@
 - `uv run start.py --dev`：本地零 GPU，改用队列协议假件 scripts/fake_comfy_worker.py（同一套参数）；
 - `--host/--port`：Web 监听地址（缺省 127.0.0.1:8000）。
 
-启动预检（M6 云端前置加固）：空 api_key 直接报错不拉起（避免任务领取后才发现缺钥）；
+启动预检：空 api_key/base_url 直接报错不拉起（避免任务领取后才发现缺配）；
 ffmpeg ≥5.1 解析（PATH 或 Hermes 工具目录）并注入本进程 PATH——agent 子进程继承，
 不依赖安装器进程的临时 PATH；非 --dev 缺 ffmpeg 报错，--dev 仅警告。
+拉起前把 config.toml 归一写入 Hermes config.yaml/.env（model 三键 + MCP 注册 + 密钥配对）：
+缺这一步 Hermes 会用出厂默认模型与端点，且没有 viggle-remake 工具可用。
 
 一键部署口径：install.py 环境安装 + models.py 模型下载 + start.py 启动（双平台手动启动，无开机自启设计）。
 """
@@ -27,6 +29,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
+from app.agent.hermes import AgentError, write_hermes_config
 from app.server.api import create_app
 from scripts.config import Config, ConfigError, load_config, resolve_remake_home
 from scripts.installer import InstallError, Installer
@@ -37,10 +40,15 @@ DEFAULT_PORT = 8000
 
 
 def check_api_keys(config: Config) -> None:
-    """空密钥预检：agent 链（LLM 决策 + painter 绘制）两者缺一不可，启动即报错。"""
-    missing = [f"[{name}].api_key" for name, value in
-               (("llm", config.llm_api_key), ("painter", config.painter_api_key))
-               if not value.strip()]
+    """空密钥/空端点预检：agent 链（LLM 决策 + painter 绘制）base_url 与 api_key 须配对齐备。
+
+    端点为空时 Hermes 静默回落出厂默认模型与 OpenRouter 端点，任务领取后才以 404 暴露，
+    故启动即报错。
+    """
+    missing = [f"[{name}].{key}" for name, pairs in
+               (("llm", (("base_url", config.llm_base_url), ("api_key", config.llm_api_key))),
+                ("painter", (("base_url", config.painter_base_url), ("api_key", config.painter_api_key))))
+               for key, value in pairs if not value.strip()]
     if missing:
         raise ConfigError(f"{'、'.join(missing)} 为空：请在 config.toml 填写后重启。")
 
@@ -149,6 +157,12 @@ def main(
     else:
         print("[start] 未找到 ffmpeg/ffprobe ≥5.1：请先运行 install.py（阶段 7 会安装）或将其加入 PATH。",
               file=sys.stderr)
+        return 1
+    # Hermes 注册（幂等外科手术写入）：model 三键 + MCP 注册 + .env 密钥配对以 config.toml 为准。
+    try:
+        write_hermes_config(root, config=config, log=log)
+    except AgentError as exc:
+        print(f"[start] {exc}", file=sys.stderr)
         return 1
     log(f"[start] 守护进程启动：{' '.join(command)}")
     stop = threading.Event()

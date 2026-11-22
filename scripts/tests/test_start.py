@@ -1,9 +1,9 @@
 """M2.4/M5.4：start.py 启动器——worker 守护 + 阶段 9 Web 服务入口（uvicorn + SPA 静态服务）。
 
 零费单测：worker 命令构建（真实/--dev 假件）、main 编排（守护线程 + serve 注入、
-stop 收尾、中断 130、缺件/坏配置报错）、启动预检（空密钥报错/ffmpeg PATH 注入）、
-web_app 组装（进程池启用 + dist 缺省路径）、create_app(web_dist=...) SPA 静态服务
-（客户端路由回退/真实文件直出/api 前缀不吞 404/越界路径不泄露 dist 外文件）。
+stop 收尾、中断 130、缺件/坏配置报错）、启动预检（空密钥/空端点报错 + Hermes 注册接线、
+ffmpeg PATH 注入）、web_app 组装（进程池启用 + dist 缺省路径）、create_app(web_dist=...)
+SPA 静态服务（客户端路由回退/真实文件直出/api 前缀不吞 404/越界路径不泄露 dist 外文件）。
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.agent.hermes import AgentError
 from app.server.api import create_app
 from scripts.config import Config, ConfigError
 from scripts.installer import venv_python
@@ -85,7 +86,8 @@ class MainTests(unittest.TestCase):
             if serve is not None:
                 serve()
 
-        with patch("start.ensure_ffmpeg", return_value=ffmpeg):
+        with patch("start.ensure_ffmpeg", return_value=ffmpeg), \
+                patch("start.write_hermes_config", return_value=(Path("config.yaml"), Path(".env"))):
             code = main(argv, root=root, supervise_fn=supervise_fn, serve_fn=serve_fn,
                         log=lambda _m: None)
         for app, _host, _port in served:
@@ -167,6 +169,47 @@ class MainTests(unittest.TestCase):
             self.assertIn("remake_worker.py", supervised[0][1])
             self.assertEqual(len(served), 1)
 
+    def test_main_registers_hermes_config_from_config_toml(self) -> None:
+        """启动即把 config.toml 归一写入 Hermes（model 三键 + MCP 注册 + .env 密钥配对）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(tmp)
+            calls: list[tuple] = []
+
+            def register(r, *, config=None, log=print):
+                calls.append((r, config))
+                return Path("config.yaml"), Path(".env")
+
+            with patch("start.ensure_ffmpeg", return_value=None), \
+                    patch("start.write_hermes_config", side_effect=register):
+                code = main(["--dev"], root=root, supervise_fn=lambda command, stop: 0,
+                            serve_fn=lambda app, **kwargs: app.state.store.close(),
+                            log=lambda _m: None)
+            self.assertEqual(code, 0)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], root)
+            self.assertEqual(calls[0][1].llm_api_key, "test-llm-key")
+
+    def test_main_hermes_registration_failure_reports_without_starting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(tmp)
+            supervised: list = []
+            served: list = []
+
+            def supervise_fn(command, stop):
+                supervised.append(list(command))
+                return 0
+
+            def serve_fn(app, *, host, port, log):
+                served.append(app)
+
+            with patch("start.ensure_ffmpeg", return_value=None), \
+                    patch("start.write_hermes_config", side_effect=AgentError("未找到 Hermes config.yaml")):
+                code = main(["--dev"], root=root, supervise_fn=supervise_fn, serve_fn=serve_fn,
+                            log=lambda _m: None)
+            self.assertEqual(code, 1)
+            self.assertEqual(supervised, [])  # 注册失败不拉起守护，也不起 Web
+            self.assertEqual(served, [])
+
 
 class PreflightTests(unittest.TestCase):
     """启动预检：空密钥报错面 + ffmpeg 解析/PATH 注入（复用安装器校验，零下载零费）。"""
@@ -179,6 +222,13 @@ class PreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, r"\[llm\]\.api_key"):
             check_api_keys(Config(llm_api_key="   ", painter_api_key="k"))  # 空白视同缺钥
         check_api_keys(Config(llm_api_key="k1", painter_api_key="k2"))  # 齐备不报错
+
+    def test_check_api_keys_reports_empty_base_url(self) -> None:
+        """端点为空同样启动即拦：否则 Hermes 静默回落出厂默认模型与 OpenRouter 端点。"""
+        with self.assertRaisesRegex(ConfigError, r"\[llm\]\.base_url"):
+            check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", llm_base_url=""))
+        with self.assertRaisesRegex(ConfigError, r"\[painter\]\.base_url"):
+            check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", painter_base_url="  "))
 
     def _tools_dir(self, root: Path) -> Path:
         bindir = root / "data/home/hermes/tools/ffmpeg-6.0/bin"
