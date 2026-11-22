@@ -583,6 +583,35 @@ class Installer:
                 recorded.unlink()
         return quarantined
 
+    def _managed_python_ok(self, python: Path) -> bool:
+        try:
+            self.run_command([python, "-c", "pass"])
+            return True
+        except InstallError:
+            return False
+
+    def quarantine_broken_managed_pythons(self) -> list[Path]:
+        """持久树里启动失败的托管 Python 挪边：bootstrap 优先复用现有托管解释器且只查
+        可执行位不查能否启动，悬空底座会被当成"就绪"沿用，venv 建在其上重启即崩；
+        挪走后 bootstrap 才会重新下载到底座完整的持久目录。"""
+        runtime_dir = self.vendor / "hermes-runtime"
+        quarantined = []
+        for entry in sorted(runtime_dir.glob("python-*")):
+            if not entry.is_dir() or ".broken" in entry.name:
+                continue
+            python = entry / ("python.exe" if self.platform == "win32" else "bin/python3")
+            if python.is_file() and self._managed_python_ok(python):
+                continue
+            target = entry.with_name(entry.name + ".broken")
+            suffix = 0
+            while target.exists():
+                suffix += 1
+                target = entry.with_name(f"{entry.name}.broken{suffix}")
+            entry.rename(target)
+            quarantined.append(target)
+            self.log(f"隔离不可用托管 Python：{entry} → {target}")
+        return quarantined
+
     def hermes_installer_script(self) -> Path:
         filename = "install.ps1" if self.platform == "win32" else "install.sh"
         existing = self.hermes_source / "scripts" / filename
@@ -610,9 +639,14 @@ class Installer:
         quarantined: list[Path] = []
         if python is None:
             quarantined = self.quarantine_broken_hermes_envs()
+            broken_pythons = self.quarantine_broken_managed_pythons()
             self.hermes_home.mkdir(parents=True, exist_ok=True)
             self._install_hermes_official()
             python = self.verify_existing_hermes()
+            if python is not None:
+                for directory in broken_pythons:
+                    shutil.rmtree(directory, ignore_errors=True)
+                    self.log(f"已清理隔离的坏托管 Python：{directory}")
         if python is None:
             detail = ("Hermes 安装失败：官方安装器未产出"
                       "可导入 hermes_cli.main 的 runtime venv Python。")
@@ -631,12 +665,16 @@ class Installer:
         # 临时可写层重启/迁移即被清，venv 底座悬空致 encodings 崩。钉到项目持久树：
         # PM store_root() 认 HERMES_RUNTIME_DIR，bootstrap 的 uv python install 认
         # UV_PYTHON_INSTALL_DIR，两者同指持久路径，3.14 底座遂随实例生命周期存活。
+        # uv 缓存同样钉持久树并强制 copy 链接：默认 hardlink 会引用缓存/镜像层内的文件，
+        # 那些层被清后持久目录里只剩悬空链接，解释器启动即崩。
         runtime_dir = self.vendor / "hermes-runtime"
         env = {
             **os.environ,
             "HERMES_HOME": str(self.hermes_home),
             "HERMES_RUNTIME_DIR": str(runtime_dir),
             "UV_PYTHON_INSTALL_DIR": str(runtime_dir),
+            "UV_CACHE_DIR": str(runtime_dir / "uv-cache"),
+            "UV_LINK_MODE": "copy",
         }
         if self.platform == "win32":
             shell = shutil.which("powershell") or shutil.which("pwsh")

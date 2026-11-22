@@ -784,6 +784,8 @@ class HermesQuarantineRebuildTests(unittest.TestCase):
             runtime_dir = installer.vendor / "hermes-runtime"
             self.assertEqual(env["HERMES_RUNTIME_DIR"], str(runtime_dir))  # PM store_root() 认此
             self.assertEqual(env["UV_PYTHON_INSTALL_DIR"], str(runtime_dir))  # bootstrap uv python install 认此
+            self.assertEqual(env["UV_CACHE_DIR"], str(runtime_dir / "uv-cache"))  # 缓存不回落临时层
+            self.assertEqual(env["UV_LINK_MODE"], "copy")  # 禁 hardlink 引用临时层文件
             self.assertEqual(env["HERMES_HOME"], str(installer.hermes_home))
             self.assertTrue(runtime_dir.is_relative_to(installer.vendor))  # 落持久盘而非临时层
 
@@ -797,6 +799,49 @@ class HermesQuarantineRebuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(InstallError, "hermes_cli.main"):
                     installer.install_hermes()
             self.assertTrue(bad.parent.parent.with_name("venv.broken").exists())  # 留现场供诊断
+
+    def _managed_python(self, installer: Installer, name: str) -> Path:
+        entry = installer.vendor / "hermes-runtime" / name
+        python = entry / "bin/python3"
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b"fake interpreter")
+        return python
+
+    def test_quarantine_broken_managed_python_keeps_healthy(self) -> None:
+        """启动失败的托管 Python 挪边，健康的不动；bootstrap 只查可执行位，悬空底座会被沿用。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            good = self._managed_python(installer, "python-3.14.9+20261021-linux-x64")
+            bad = self._managed_python(installer, "python-3.14.9+20260101-linux-x64")
+            installer.runner = ScriptedRunner({str(bad): _fail})
+
+            quarantined = installer.quarantine_broken_managed_pythons()
+            self.assertEqual(quarantined, [bad.parent.parent.with_name(bad.parent.parent.name + ".broken")])
+            self.assertTrue(good.is_file())
+            self.assertFalse(bad.exists())
+            self.assertEqual(installer.quarantine_broken_managed_pythons(), [])  # 重入无副作用
+
+    def test_rebuild_quarantines_broken_base_python_and_cleans_after_success(self) -> None:
+        """重建前先隔离坏底座，否则 bootstrap 沿用悬空解释器，新 venv 依旧建在坏底座上。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self._installer(Path(temporary), ScriptedRunner())
+            self._marker(installer)
+            bad_venv = self._venv(installer, "aaaa", "bad")
+            bad_base = self._managed_python(installer, "python-3.14.9+20261021-linux-x64")
+            fresh = installer.hermes_home / "installs/cccc/environments/dddd/venv/bin/python"
+
+            def rebuild(command: list[str]) -> None:
+                fresh.parent.mkdir(parents=True, exist_ok=True)
+                fresh.write_bytes(b"fake interpreter")
+
+            installer.runner = ScriptedRunner({str(bad_venv): _fail, str(bad_base): _fail, "bash": rebuild})
+            with patch.object(installer, "configure_ffmpeg", return_value=Path("ffmpeg")):
+                installer.install_hermes()
+
+            broken_base = bad_base.parent.parent.with_name(bad_base.parent.parent.name + ".broken")
+            self.assertFalse(broken_base.exists())  # 重建成功后清理隔离
+            self.assertEqual((installer.hermes_home / "runtime-python.txt").read_text(encoding="utf-8"),
+                             f"{fresh}\n")
 
 
 class FfmpegResolutionTests(unittest.TestCase):
