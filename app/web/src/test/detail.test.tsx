@@ -1,19 +1,28 @@
 // 页面 2/3 组件测试（mock API）：时间线、产物预览、成片、反馈重制、失败重试、日志。
 
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { TaskDetailPage } from "../pages/TaskDetailPage";
 import { callOf, makeProgress, makeTask, mockFetch, renderPage } from "./helpers";
 import type { ProgressState } from "../hooks";
-import type { Task } from "../types";
+import type { Artifacts, Task, WindowInfo } from "../types";
 
-const ARTIFACTS = {
+const ARTIFACTS: Artifacts = {
   keyframes: ["case/paint/g1/f60.png", "case/paint/g2/f120.png"],
   takes: ["case/takes/w0_480_s0_1.mp4"],
-  strips: ["case/look/strips_0.jpg"],
+  strips: ["case/review/480_w0.jpg"],
   finals: ["case/final/full_480.mp4"],
+  windows: [],
 };
+
+const WINDOWS: WindowInfo[] = [
+  { index: 0, own: [0, 120], render: [0, 124], own_s: [0, 5], passthrough: false,
+    picked_seed: 0, grade: "OK", note: "clean" },
+  { index: 1, own: [120, 240], render: [120, 244], own_s: [5, 10], passthrough: true,
+    picked_seed: null, grade: null, note: null },
+];
+const WITH_WINDOWS: Artifacts = { ...ARTIFACTS, windows: WINDOWS };
 
 function handler(task: Task, artifacts = ARTIFACTS) {
   return (url: string, init?: RequestInit) => {
@@ -52,9 +61,19 @@ describe("TaskDetailPage", () => {
     expect(screen.getByTestId("stage-final")).toHaveClass("pending");
     expect(screen.getByAltText("case/paint/g1/f60.png"))
       .toHaveAttribute("src", "/files/sessions/t1/case/paint/g1/f60.png");
-    expect(screen.getByAltText("case/look/strips_0.jpg")).toBeInTheDocument();
+    expect(screen.getByAltText("case/review/480_w0.jpg")).toBeInTheDocument();
     expect(screen.getByText("case/takes/w0_480_s0_1.mp4")).toBeInTheDocument();
     expect(screen.getByTestId("task-log")).toHaveTextContent("[pool] 领取任务");
+  });
+
+  it("审查不早于渲染点亮（旧数据是读片条带也不跳阶段）", async () => {
+    const task = makeTask({ progress: makeProgress({ ingest: true, plan: true, painted: 3,
+                                                     takes: 0, review: true }) });
+    mockFetch(handler(task));
+    renderDetail(task);
+    expect(await screen.findByTestId("stage-painted")).toHaveClass("done");
+    expect(screen.getByTestId("stage-takes")).toHaveClass("pending");
+    expect(screen.getByTestId("stage-review")).toHaveClass("pending");
   });
 
   it("终态展示成片播放与下载及反馈表单", async () => {
@@ -146,5 +165,69 @@ describe("TaskDetailPage", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("反馈已提交");
     // 反馈响应 updated_at 更新（真实 store 口径），胜过旧快照 → 历史即时展示
     expect(await screen.findByText(/第 1 次反馈：第 0 窗色调偏暗/)).toBeInTheDocument();
+  });
+
+  it("渲染窗口清单给出编号、成片/源片时间码与状态", async () => {
+    const done = makeTask({ status: "done", final: "/tmp/full.mp4", start: 3 });
+    mockFetch(handler(done, WITH_WINDOWS));
+    renderDetail(done);
+    expect(await screen.findByTestId("window-list")).toBeInTheDocument();
+    expect(screen.getByTestId("window-0")).toHaveTextContent("00:00.0–00:05.0");
+    expect(screen.getByTestId("window-0")).toHaveTextContent("源片 00:03.0–00:08.0");
+    expect(screen.getByTestId("window-0")).toHaveTextContent("已交付 seed 0");
+    expect(screen.getByTestId("window-1")).toHaveTextContent("未渲染（沿用源片）");
+  });
+
+  it("反馈重制可点选窗口并下发 0-based 编号", async () => {
+    const user = userEvent.setup();
+    const done = makeTask({ status: "done", final: "/tmp/full.mp4" });
+    const fetchFn = mockFetch(handler(done, WITH_WINDOWS));
+    renderDetail(done);
+    await screen.findByTestId("window-chips");
+    await user.click(within(screen.getByTestId("window-chips")).getByRole("checkbox", { name: /w1/ }));
+    expect(screen.getByText(/已点名：w1/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("反馈内容"), "w1 脸部不像");
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("反馈已提交");
+    const call = callOf(fetchFn, "/api/tasks/t1/feedback", "POST");
+    expect(JSON.parse(String(call![1]!.body))).toEqual({ text: "w1 脸部不像", windows: [1] });
+  });
+
+  it("审查对比条点击放大并关闭", async () => {
+    const user = userEvent.setup();
+    mockFetch(handler(makeTask()));
+    renderDetail(makeTask());
+    const zoom = await screen.findByRole("button", { name: /放大 w0 · 480 审查对比条/ });
+    await user.click(zoom);
+    expect(screen.getByRole("dialog", { name: /w0 · 480 审查对比条 原图/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看原图" }))
+      .toHaveAttribute("href", "/files/sessions/t1/case/review/480_w0.jpg");
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("定位窗口高亮当前播放段", async () => {
+    const user = userEvent.setup();
+    const done = makeTask({ status: "done", final: "/tmp/full.mp4" });
+    mockFetch(handler(done, WITH_WINDOWS));
+    renderDetail(done);
+    const card = await screen.findByTestId("window-1");
+    await user.click(within(card).getByRole("button", { name: "定位" }));
+    expect(card).toHaveClass("active");
+    expect(screen.getByText(/当前播放：w1/)).toBeInTheDocument();
+  });
+
+  it("文字里的第 N 窗给出提示，反馈历史显示窗口时间码", async () => {
+    const user = userEvent.setup();
+    const done = makeTask({ status: "done", final: "/tmp/full.mp4" });
+    mockFetch(handler(done, WITH_WINDOWS));
+    renderDetail(done);
+    await screen.findByTestId("window-chips");
+    await user.type(screen.getByLabelText("反馈内容"), "第 2 窗脸部不像");
+    expect(screen.getByText(/不会被解析/)).toBeInTheDocument();
+    await user.click(within(screen.getByTestId("window-chips")).getByRole("checkbox", { name: /w1/ }));
+    await user.click(screen.getByRole("button", { name: "提交反馈" }));
+    expect(await screen.findByText(/第 1 次反馈：第 2 窗脸部不像（w1 00:05.0–00:10.0）/))
+      .toBeInTheDocument();
   });
 });

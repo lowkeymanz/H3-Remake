@@ -49,16 +49,22 @@ def followup_prompt(task: Task) -> str:
 
 
 def session_progress(session_dir: Path) -> dict:
-    """读会话产物推导阶段进度（需求八：读 sessions/ 产物；事件推送见 pool.py）。"""
+    """读会话产物推导阶段进度（需求八：读 sessions/ 产物；事件推送见 pool.py）。
+
+    审查产物口径：case/look/strips_*.jpg 是 ingest 附带的读片镜头条带（规划用），
+    真正的渲染审查对比条是 strip(sid, windows) 落的 case/review/<canvas>_w<i>.jpg，
+    后者依赖 case/takes/*.mp4，故 review 同时要求已有 take，防止时间线跳阶段。
+    """
     session_dir = Path(session_dir)
     case = session_dir / "case"
     painted = sum(1 for p in case.glob("paint/*/f*.png") if p.parent.name != "src")
+    takes = len(list((case / "takes").glob("*.mp4"))) if (case / "takes").is_dir() else 0
     return {
         "ingest": (case / "meta.json").is_file(),
         "plan": (case / "plan_grid.json").is_file(),
         "painted": painted,
-        "takes": len(list((case / "takes").glob("*.mp4"))) if (case / "takes").is_dir() else 0,
-        "review": any(case.glob("look/strips_*.jpg")),
+        "takes": takes,
+        "review": takes > 0 and any(case.glob("review/*_w*.jpg")),
         "final": any(case.glob("final/full_*.mp4")),
         "result": result_status(session_dir),
     }

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -150,18 +151,45 @@ class ApiExtTests(unittest.TestCase):
     def test_artifacts_empty_then_lists(self):
         tid = self._create_task()
         empty = self.client.get(f"/api/tasks/{tid}/artifacts").json()
-        self.assertEqual(empty, {"keyframes": [], "takes": [], "strips": [], "finals": []})
-        case = self.home / "sessions" / tid / "case"
+        self.assertEqual(empty, {"keyframes": [], "takes": [], "strips": [], "finals": [], "windows": []})
+        session = self.home / "sessions" / tid
+        case = session / "case"
         for rel in ("paint/g1/f60.png", "paint/g2/f120.png", "paint/src/f0.png",
-                    "takes/w0_480_s0_1.mp4", "look/strips_0.jpg", "final/full_480.mp4"):
+                    "takes/w0_480_s0_1.mp4", "look/strips_0.jpg", "review/480_w0.jpg",
+                    "final/full_480.mp4"):
             path = case / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"x")
+        (case / "refs.json").write_text(json.dumps({"windows": [
+            {"own": [0, 120], "render": [0, 124], "refs": [60], "passthrough": False},
+            {"own": [120, 240], "render": [120, 244], "refs": [], "passthrough": True}]}),
+            encoding="utf-8")
+        (session / "result.json").write_text(json.dumps({
+            "status": "done", "picks": {"0": 0},
+            "windows": [{"w": 0, "grade": "OK", "note": "clean"}]}), encoding="utf-8")
         body = self.client.get(f"/api/tasks/{tid}/artifacts").json()
         self.assertEqual(body["keyframes"], ["case/paint/g1/f60.png", "case/paint/g2/f120.png"])
         self.assertEqual(body["takes"], ["case/takes/w0_480_s0_1.mp4"])
-        self.assertEqual(body["strips"], ["case/look/strips_0.jpg"])
+        self.assertEqual(body["strips"], ["case/review/480_w0.jpg"])  # 读片条带不列入审查对比条
         self.assertEqual(body["finals"], ["case/final/full_480.mp4"])
+        self.assertEqual(body["windows"], [
+            {"index": 0, "own": [0, 120], "render": [0, 124], "own_s": [0.0, 5.0],
+             "passthrough": False, "picked_seed": 0, "grade": "OK", "note": "clean"},
+            {"index": 1, "own": [120, 240], "render": [120, 244], "own_s": [5.0, 10.0],
+             "passthrough": True, "picked_seed": None, "grade": None, "note": None}])
+
+    def test_artifacts_windows_picks_fallback_and_broken_refs(self):
+        tid = self._create_task()
+        case = self.home / "sessions" / tid / "case"
+        case.mkdir(parents=True, exist_ok=True)
+        (case / "refs.json").write_text(json.dumps({"windows": [{"own": [0, 90], "render": [0, 90]}]}),
+                                        encoding="utf-8")
+        (case / "picks_480.json").write_text(json.dumps({"0": 1}), encoding="utf-8")  # result.json 缺 picks
+        url = f"/api/tasks/{tid}/artifacts"
+        window = self.client.get(url).json()["windows"][0]
+        self.assertEqual((window["own_s"], window["picked_seed"]), ([0.0, 3.75], 1))
+        (case / "refs.json").write_text("not json", encoding="utf-8")
+        self.assertEqual(self.client.get(url).json()["windows"], [])  # 坏文件降级，不拖垮产物清单
 
     def test_artifacts_404(self):
         self.assertEqual(self.client.get("/api/tasks/nope/artifacts").status_code, 404)

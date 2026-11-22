@@ -46,6 +46,72 @@ def new_task_id() -> str:
     return "t" + uuid.uuid4().hex[:12]
 
 
+FPS = 24  # MCP ingest 统一 24fps（需求.md：窗口 17n+5 帧、24fps）
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _window_entries(session_dir: Path) -> list | None:
+    """case/refs.json 的 windows 数组；尚无切窗结果（或坏文件）时返回 None。"""
+    refs = _read_json(session_dir / "case" / "refs.json")
+    entries = refs.get("windows") if refs else None
+    return entries if isinstance(entries, list) else None
+
+
+def _pair(value: object) -> list[int]:
+    return [int(value[0]), int(value[1])] if isinstance(value, (list, tuple)) and len(value) >= 2 else [0, 0]
+
+
+def window_list(session_dir: Path) -> list[dict]:
+    """窗口清单：MCP windows() 的帧区间 → 秒 + 交付报告里的选用 seed / 验收结论。
+
+    refs.json（case/refs.json）给 own/render/passthrough；result.json 的 picks/windows
+    （save_result 交付报告）给每窗最终选用的 seed 与 grade/note，缺 picks 时回落
+    case/picks_<canvas>.json。帧号相对任务处理区间的 0 点，故 own_s 即成片内时间码。
+    """
+    entries = _window_entries(session_dir)
+    if entries is None:
+        return []
+    result = _read_json(session_dir / "result.json") or {}
+    picks: dict[int, int] = {}
+    raw_picks = result.get("picks")
+    if isinstance(raw_picks, dict):
+        picks = {int(k): v for k, v in raw_picks.items()
+                 if str(k).isdigit() and isinstance(v, int) and not isinstance(v, bool)}
+    if not picks:
+        for path in sorted((session_dir / "case").glob("picks_*.json")):
+            fallback = _read_json(path)
+            if isinstance(fallback, dict):
+                picks = {int(k): v for k, v in fallback.items()
+                         if str(k).isdigit() and isinstance(v, int) and not isinstance(v, bool)}
+                if picks:
+                    break
+    grades: dict[int, tuple[str, str]] = {}
+    reports = result.get("windows")
+    if isinstance(reports, list):
+        for item in reports:
+            if isinstance(item, dict) and isinstance(item.get("w"), int) and not isinstance(item["w"], bool):
+                grades[item["w"]] = (str(item.get("grade") or ""), str(item.get("note") or ""))
+    out = []
+    for index, window in enumerate(entries):
+        if not isinstance(window, dict):
+            continue
+        own = _pair(window.get("own"))
+        render = _pair(window.get("render")) if window.get("render") else own
+        grade, note = grades.get(index, ("", ""))
+        out.append({"index": index, "own": own, "render": render,
+                    "own_s": [round(own[0] / FPS, 2), round(own[1] / FPS, 2)],
+                    "passthrough": bool(window.get("passthrough")),
+                    "picked_seed": picks.get(index), "grade": grade or None, "note": note or None})
+    return out
+
+
 def _sync_running(store: TaskStore, task: Task, session_dir: Path) -> Task:
     """running 任务对盘上 result.json 重新裁决：已交付同步终态与成片路径。"""
     if task.status != "running":
@@ -174,7 +240,7 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
     @app.get("/api/tasks/{task_id}/artifacts")
     def get_artifacts(task_id: str):
         """中间产物清单（M5.3 预览）：与 session_progress 同口径，相对会话目录路径，
-        前端拼 /files/sessions/<task_id>/<rel> 直出。"""
+        前端拼 /files/sessions/<task_id>/<rel> 直出；另附窗口清单供反馈点名（帧区间→秒）。"""
         task_of(task_id)
         case = home / "sessions" / task_id / "case"
 
@@ -184,8 +250,10 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
         return {
             "keyframes": rels(p for p in case.glob("paint/*/f*.png") if p.parent.name != "src"),
             "takes": rels(case.glob("takes/*.mp4")),
-            "strips": rels(case.glob("look/strips_*.jpg")),
+            # 审查对比条；case/look/strips_*.jpg 是 ingest 的读片镜头条带，不属审查
+            "strips": rels(case.glob("review/*_w*.jpg")),
             "finals": rels(case.glob("final/full_*.mp4")),
+            "windows": window_list(home / "sessions" / task_id),
         }
 
     # ── 反馈重制 API ─────────────────────────────────────────────────────────
@@ -196,8 +264,12 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
         if not text:
             raise HTTPException(400, "反馈内容不能为空")
         windows = body.get("windows") or []
-        if not isinstance(windows, list) or not all(isinstance(w, int) and w >= 0 for w in windows):
+        if not isinstance(windows, list) or not all(
+                isinstance(w, int) and not isinstance(w, bool) and w >= 0 for w in windows):
             raise HTTPException(400, "windows 须为非负整数数组（反馈点名的窗口）")
+        entries = _window_entries(home / "sessions" / task_id)
+        if entries is not None and any(w >= len(entries) for w in windows):
+            raise HTTPException(400, f"窗口编号须在 0..{len(entries) - 1}（本任务共 {len(entries)} 个窗口）")
         entry = {"text": text, "windows": windows, "at": time.time()}
         try:
             task = store.add_feedback(task_id, entry)

@@ -163,6 +163,7 @@ class ServiceE2eTests(unittest.TestCase):
                     self.assertTrue(detail["progress"]["final"])
                     self.assertGreaterEqual(detail["progress"]["painted"], 2)
                     self.assertGreaterEqual(detail["progress"]["takes"], 1)
+                    self.assertTrue(detail["progress"]["review"])  # 真 MCP strip → case/review/*_w*.jpg
                     self.assertTrue(client.get(f"/api/tasks/{tid}/log").json()["log"])
                     # 成片下载（字节一致）+ 中间产物静态访问
                     final = Path(detail["final"])

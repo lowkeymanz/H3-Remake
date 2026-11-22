@@ -62,3 +62,32 @@ video.player { width: 100%; max-height: 420px; background: #000; border-radius: 
 pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 280px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 .charcard img { max-height: 160px; object-fit: contain; }
 a.download { display: inline-block; margin-top: 8px; color: var(--accent); }
+
+/* 产物图放大（缩略图网格 ~200px 宽，对比条原图约 1920px） */
+.thumb { display: block; width: 100%; padding: 0; margin: 0; border: 0; background: transparent; cursor: zoom-in; }
+.thumb img { display: block; width: 100%; border-radius: 4px; }
+.lightbox { position: fixed; inset: 0; z-index: 50; padding: 12px; overflow: auto;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+            background: rgba(8, 10, 14, .94); }
+.lightbox-bar { display: flex; align-items: center; gap: 14px; color: var(--text); }
+.lightbox-bar a { color: var(--accent); }
+.lightbox-bar button { margin-top: 0; }
+.lightbox-img { display: block; max-width: 96vw; max-height: 82vh; width: auto; height: auto;
+                object-fit: contain; border-radius: 6px; }
+.grid .lightbox-img { width: auto; height: auto; }
+
+/* 渲染窗口清单与反馈点选 */
+.windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.window-card { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 12px;
+               border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.window-card strong { min-width: 36px; color: var(--accent); }
+.window-card span { flex: 1; min-width: 220px; font-size: 12px; color: var(--muted); }
+.window-card button { margin-top: 0; }
+.window-card.active { border-color: var(--accent); }
+.window-card.selected { background: rgba(79, 140, 255, .12); }
+.window-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.window-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 5px 10px;
+               border: 1px solid var(--line); border-radius: 16px; font-size: 12px; cursor: pointer; }
+.window-chip input { width: auto; }
+.window-chip.selected { border-color: var(--accent); color: var(--accent); }
+.artifact-label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text); }

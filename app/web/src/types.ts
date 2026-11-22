@@ -38,11 +38,24 @@ export interface Task {
   progress?: Progress;
 }
 
+// /api/tasks/{id}/artifacts 的窗口清单：refs.json 帧区间 + 交付报告（帧号按 24fps 换算秒）
+export interface WindowInfo {
+  index: number;
+  own: [number, number];
+  render: [number, number];
+  own_s: [number, number];
+  passthrough: boolean;
+  picked_seed: number | null;
+  grade: string | null;
+  note: string | null;
+}
+
 export interface Artifacts {
   keyframes: string[];
   takes: string[];
   strips: string[];
   finals: string[];
+  windows: WindowInfo[];
 }
 
 export interface CharEntry {

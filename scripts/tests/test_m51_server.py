@@ -283,18 +283,36 @@ class ApiTests(unittest.TestCase):
     def test_progress_from_session_artifacts(self) -> None:
         task = self._create()
         case = self.home / "sessions" / task["task_id"] / "case"
-        for sub in ("paint/g2", "paint/src", "takes", "look", "final"):
+        for sub in ("paint/g2", "paint/src", "takes", "look", "review", "final"):
             (case / sub).mkdir(parents=True)
         (case / "meta.json").write_text("{}", encoding="utf-8")
         (case / "plan_grid.json").write_text("{}", encoding="utf-8")
         (case / "paint" / "g2" / "f60.png").write_bytes(_png_bytes())
         (case / "paint" / "src" / "f60.png").write_bytes(_png_bytes())  # src 帧不算绘制
         (case / "takes" / "w0_480_s0_1.mp4").write_bytes(b"t")
-        (case / "look" / "strips_0.jpg").write_bytes(b"s")
+        (case / "look" / "strips_0.jpg").write_bytes(b"s")  # ingest 镜头条带，不是审查产物
+        (case / "review" / "480_w0.jpg").write_bytes(b"r")
         (case / "final" / "full_480.mp4").write_bytes(b"f")
         progress = self.client.get(f"/api/tasks/{task['task_id']}").json()["progress"]
         self.assertEqual(progress, {"ingest": True, "plan": True, "painted": 1, "takes": 1,
                                     "review": True, "final": True, "result": None})
+
+    def test_review_progress_requires_take_and_review_strip(self) -> None:
+        """回归：ingest 的镜头条带不能点亮审查，审查须晚于渲染。"""
+        task = self._create()
+        case = self.home / "sessions" / task["task_id"] / "case"
+        for sub in ("look", "review", "takes"):
+            (case / sub).mkdir(parents=True)
+
+        def review() -> bool:
+            return self.client.get(f"/api/tasks/{task['task_id']}").json()["progress"]["review"]
+
+        (case / "look" / "strips_0.jpg").write_bytes(b"s")  # 读片完成即存在
+        self.assertFalse(review())
+        (case / "review" / "480_w0.jpg").write_bytes(b"r")  # 无 take 的审查图也不算
+        self.assertFalse(review())
+        (case / "takes" / "w0_480_s0_1.mp4").write_bytes(b"t")
+        self.assertTrue(review())
 
     def test_detail_syncs_running_delivery(self) -> None:
         task = self._create()
@@ -336,9 +354,27 @@ class ApiTests(unittest.TestCase):
         self.client.get(f"/api/tasks/{task['task_id']}")
         again = self.client.post(f"/api/tasks/{task['task_id']}/feedback", json={"text": "more"})
         self.assertEqual(again.json()["rounds"], 3)
-        for bad in ({"text": " "}, {"text": "x", "windows": [-1]}, {"text": "x", "windows": "0"}):
+        for bad in ({"text": " "}, {"text": "x", "windows": [-1]}, {"text": "x", "windows": "0"},
+                    {"text": "x", "windows": [True]}):
             self.assertEqual(self.client.post(f"/api/tasks/{task['task_id']}/feedback",
                                               json=bad).status_code, 400)
+
+    def test_feedback_rejects_window_beyond_refs(self) -> None:
+        """点名窗口须落在真实窗口数内（refs.json 给出窗口数）。"""
+        task = self._create()
+        refs = self.home / "sessions" / task["task_id"] / "case" / "refs.json"
+        refs.parent.mkdir(parents=True, exist_ok=True)
+        refs.write_text(json.dumps({"windows": [{"own": [0, 90]}, {"own": [90, 180]}]}),
+                        encoding="utf-8")
+        self._deliver(task["task_id"])
+        self.client.get(f"/api/tasks/{task['task_id']}")  # 同步终态
+        url = f"/api/tasks/{task['task_id']}/feedback"
+        bad = self.client.post(url, json={"text": "fix", "windows": [2]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("0..1", bad.json()["detail"])
+        ok = self.client.post(url, json={"text": "fix", "windows": [1]})
+        self.assertEqual(ok.status_code, 200, ok.text)
+        self.assertIn("Windows the feedback names: w1", ok.json()["prompt"])
 
     def test_chars_api_and_static_preview(self) -> None:
         response = self.client.post("/api/chars/Vela/sheet",
