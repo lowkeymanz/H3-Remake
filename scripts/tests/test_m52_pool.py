@@ -236,6 +236,32 @@ class PoolUnitTests(unittest.TestCase):
         self.assertEqual(len(self.prompts["t1"]), 2)
         self.assertIn("User feedback: cut feels early", self.prompts["t1"][1])
 
+    def test_feedback_round_archives_stale_result(self) -> None:
+        """回归（浏览器实测缺陷）：反馈轮领取后旧 result.json 归档，交付判定只认
+        本轮新落盘——否则 agent 起跑 2s 即被 _sync_running 轮询拿旧裁决误标 done。"""
+        from app.server.pool import archive_stale_result
+
+        self._create("t1")
+        self.pool.start()
+        wait_for(lambda: self._status("t1") == "done", message="首轮未交付")
+        session = self.home / "sessions" / "t1"
+        gate = threading.Event()
+        self.plans["t1"] = deque([{"deliver": True, "block": gate}])
+        self.store.add_feedback("t1", {"text": "fix w0", "windows": [0]})
+        # 领取后、本轮交付前：旧裁决已归档，result.json 不在位（= 未交付）
+        wait_for(lambda: (session / "result.round1.json").is_file(), message="旧裁决未归档")
+        self.assertFalse((session / "result.json").exists())
+        gate.set()  # 放行反馈轮驱动，落本轮新裁决
+        wait_for(lambda: self._status("t1") == "done" and self.store.get("t1").rounds == 2,
+                 message="反馈轮未交付")
+        fresh = json.loads((session / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(fresh["status"], "done")  # 新裁决在位，旧裁决留档可追溯
+
+        # 无 result.json 时归档为 no-op（耗尽 failed 后反馈、重启 interrupted 续跑）
+        empty = self.home / "sessions" / "tnoresult"
+        empty.mkdir(parents=True, exist_ok=True)
+        self.assertIsNone(archive_stale_result(empty, rounds=3))
+
     def test_interrupted_task_resumes_with_recovery_prompt(self) -> None:
         self._create("t1", status="interrupted")
         self.pool.start()

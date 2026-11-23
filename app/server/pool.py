@@ -80,6 +80,26 @@ def prompt_for(task: Task, *, status: str | None = None, chars_dir: Path | None 
     return task_prompt(task, chars_dir=chars_dir)
 
 
+def archive_stale_result(session_dir: Path, rounds: int) -> str | None:
+    """反馈轮领取后归档旧 result.json（→ result.round<k>.json），返回归档名或 None。
+
+    反馈轮复用原会话目录，上一轮的交付裁决仍留在盘上；而看门狗 delivered、
+    API _sync_running 轮询、重启 store.recover 三处都凭 result.json 判交付，
+    不归档会把旧裁决误当本轮新交付（实测缺陷：反馈轮 agent 起跑 2s 即被
+    轮询误标 done，修复轮在后台白跑）。归档保留历史裁决可追溯；首轮
+    （rounds==1）盘上本无 result.json，不适用。
+    """
+    path = Path(session_dir) / "result.json"
+    if not path.is_file():
+        return None
+    name = f"result.round{rounds - 1}.json"
+    archive = Path(session_dir) / name
+    if archive.exists():
+        archive.unlink()
+    path.rename(archive)
+    return name
+
+
 class AgentPool:
     """agent 进程池：dispatcher 领取 + 每任务一个看门狗线程 + ticker 进度事件。
 
@@ -159,6 +179,10 @@ class AgentPool:
         session_dir = self.home / "sessions" / task_id
         try:
             task = self.store.get(task_id)
+            if task.rounds > 1:  # 反馈轮：旧裁决归档，交付判定只认本轮新落盘
+                archived = archive_stale_result(session_dir, task.rounds)
+                if archived:
+                    self._log_line(task_id, f"[pool] 归档上一轮裁决：result.json → {archived}。")
             chars_dir = self.home / "chars"
             prompt = prompt_for(task, status=picked_status, chars_dir=chars_dir)
             resume = resume_task_prompt(task.task_id, task.src, kind=task.mode, start=task.start_s,
