@@ -28,7 +28,7 @@ function baseHandler(tasks = [makeTask()]) {
 }
 
 describe("TasksPage", () => {
-  it("渲染任务列表：状态标签与成片下载入口", async () => {
+  it("渲染历史任务卡片：状态标签、创建时间、成片下载与整行跳转", async () => {
     const done = makeTask({ task_id: "t2", description: "已完成任务", status: "done",
                             final: "/tmp/full.mp4", created_at: 2000 });
     mockFetch(baseHandler([makeTask(), done]));
@@ -39,8 +39,58 @@ describe("TasksPage", () => {
     expect(screen.getByText("已完成")).toBeInTheDocument();
     const download = screen.getByRole("link", { name: "下载成片" });
     expect(download).toHaveAttribute("href", "/api/tasks/t2/result");
-    expect(screen.getByRole("link", { name: "把涡轮机去掉" }))
+    expect(screen.getByRole("link", { name: "查看任务：把涡轮机去掉" }))
       .toHaveAttribute("href", "/tasks/t1");
+    expect(screen.getByRole("link", { name: "查看任务：已完成任务" }))
+      .toHaveAttribute("href", "/tasks/t2");
+    // created_at=1000/2000 → 两张卡片均显示"01-01 HH:MM"（时区无关：只验证月份-日期）
+    expect(screen.getAllByText(/01-01 \d{2}:\d{2}/).length).toBe(2);
+  });
+
+  it("历史任务卡片点击跳转详情页", async () => {
+    const user = userEvent.setup();
+    mockFetch(baseHandler());
+    renderPage(<TasksPage />);
+    await screen.findByRole("link", { name: "查看任务：把涡轮机去掉" });
+    await user.click(screen.getByRole("link", { name: "查看任务：把涡轮机去掉" }));
+    expect(await screen.findByTestId("detail-probe")).toBeInTheDocument();
+  });
+
+  it("表单防污染：填一半表单 → 看历史任务 → 返回，表单必须全新清空", async () => {
+    const user = userEvent.setup();
+    const fetchFn = mockFetch(baseHandler());
+    renderPage(<TasksPage />);
+    await screen.findByRole("heading", { name: "创建任务" });
+    // 填一半表单（含 multipart 提交路径用到的字段）
+    await user.upload(screen.getByLabelText(/源视频/), new File(["x"], "s.mp4", { type: "video/mp4" }));
+    await user.type(screen.getByLabelText("任务描述"), "写了一半的描述");
+    await user.type(screen.getByLabelText(/预算上限/), "9");
+    // 中途去查看历史任务
+    await user.click(screen.getByRole("link", { name: "查看任务：把涡轮机去掉" }));
+    expect(await screen.findByTestId("detail-probe")).toBeInTheDocument();
+    // 返回任务页：组件重新挂载，表单必须全空（描述/预算/视频均不残留）
+    await user.click(screen.getByTestId("back-link"));
+    expect(await screen.findByRole("heading", { name: "创建任务" })).toBeInTheDocument();
+    expect(screen.getByLabelText("任务描述")).toHaveValue("");
+    await screen.findByDisplayValue(String(SETTINGS.budget_default));  // 预算回落默认值
+    expect(screen.queryByText("写了一半的描述")).not.toBeInTheDocument();
+    // 此时创建任务：校验应报"请选择源视频"（视频不残留），且无 POST 发出
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请选择源视频");
+    expect(callOf(fetchFn, "/api/tasks", "POST")).toBeUndefined();
+  });
+
+  it("WS 快照与 REST 列表合并：同任务取 updated_at 新者、新任务不丢", async () => {
+    // REST 拉到 t1（updated_at 旧）；WS 快照里 t1 已是 done（updated_at 新）且多了 t3
+    const wsTask = makeTask({ task_id: "t1", status: "done", updated_at: 5000 });
+    const wsNew = makeTask({ task_id: "t3", description: "WS 新任务", status: "done",
+                             updated_at: 4000, created_at: 3000 });
+    mockFetch(baseHandler());
+    renderPage(<TasksPage />, { progress: { tasks: { t1: wsTask, t3: wsNew }, logs: {}, connected: true } });
+    expect(await screen.findByText("WS 新任务")).toBeInTheDocument();
+    // 两个卡片均为"已完成"（t1 取 WS 新状态而非 REST 的 running）
+    expect(screen.getAllByText("已完成").length).toBe(2);
+    expect(screen.queryByText("运行中")).not.toBeInTheDocument();
   });
 
   it("空列表提示", async () => {

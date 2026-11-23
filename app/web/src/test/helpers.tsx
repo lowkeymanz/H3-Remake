@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { vi } from "vitest";
 import { ProgressContext } from "../hooks";
 import type { ProgressState } from "../hooks";
@@ -57,7 +57,12 @@ export function renderPage(ui: ReactElement, opts: {
       <MemoryRouter initialEntries={[route]}>
         <Routes>
           <Route path={path} element={ui} />
-          <Route path="/tasks/:taskId" element={<div data-testid="detail-probe">详情页</div>} />
+          <Route path="/tasks/:taskId" element={
+            <div data-testid="detail-probe">
+              详情页
+              <Link to={path} data-testid="back-link">返回</Link>
+            </div>
+          } />
         </Routes>
       </MemoryRouter>
     </ProgressContext.Provider>,
