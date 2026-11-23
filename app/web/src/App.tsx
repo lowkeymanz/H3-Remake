@@ -32,7 +32,7 @@ export function App() {
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </main>
-          <footer className="compliance">Powered by H3-Remake · MiniMax H3</footer>
+          <footer className="compliance">Powered by H3-Remake · 视频模型：MiniMax H3</footer>
         </div>
       </BrowserRouter>
     </ProgressContext.Provider>
