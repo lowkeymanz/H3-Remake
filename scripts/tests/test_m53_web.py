@@ -11,9 +11,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.agent.hermes import AgentError
 from app.server import settings
 from app.server.api import create_app
 from scripts.config import ConfigError, load_config
@@ -214,6 +216,28 @@ class ApiExtTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         resp = self.client.put("/api/settings", json={"nope": {}})
         self.assertEqual(resp.status_code, 400)
+
+    def test_settings_put_syncs_hermes_registration(self):
+        """保存后重注册 Hermes：painter 密钥同步进 config.yaml/.env，下一任务即生效。"""
+        with patch("app.server.api.write_hermes_config") as register:
+            resp = self.client.put("/api/settings", json={"llm": {"model": "m2"}})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        register.assert_called_once_with(self.root)
+
+    def test_settings_put_survives_uninstalled_hermes(self):
+        """Hermes 未安装（config.yaml 缺失）保存不报错，启动时自动补注册。"""
+        with patch("app.server.api.write_hermes_config", side_effect=AgentError("未找到 Hermes config.yaml")):
+            resp = self.client.put("/api/settings", json={"llm": {"model": "m2"}})
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+    def test_create_task_requires_api_keys(self):
+        """开箱无密钥：创建被拦并引导去设置页填写（服务本身正常启动）。"""
+        (self.root / "config.toml").write_text('[llm]\napi_key = ""\n', encoding="utf-8")
+        resp = self.client.post("/api/tasks",
+                                files={"video": ("s.mp4", b"fake-video", "video/mp4")},
+                                data={"description": "测试", "mode": "edit"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("设置", resp.json()["detail"])
 
 
 if __name__ == "__main__":

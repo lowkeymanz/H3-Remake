@@ -319,6 +319,9 @@ class ApiWsTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self._tmp.name)
         self.home = self.root / "home"
+        # 创建任务前置校验要求密钥齐备：夹具预置双密钥（镜像口径由用户在设置页填写）
+        (self.root / "config.toml").write_text(
+            '[llm]\napi_key = "test-llm"\n\n[painter]\napi_key = "test-painter"\n', encoding="utf-8")
         self.app = create_app(self.root, home=self.home)
         self._stack = ExitStack()
         self.client = self._stack.enter_context(TestClient(self.app))

@@ -123,10 +123,9 @@ class AgentPool:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._llm = None if drive is not None else load_config(self.root)
         # 单轮超时缺省读 config [agent].round_timeout（显式注入优先，测试用短超时）
         self.timeout = float(timeout if timeout is not None
-                             else (self._llm or load_config(self.root)).agent_round_timeout)
+                             else load_config(self.root).agent_round_timeout)
 
     # ── 生命周期 ─────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -191,9 +190,10 @@ class AgentPool:
             self.bus.publish({"type": "task_status", "task_id": task_id, "status": "running",
                               "rounds": task.rounds})
             self._log_line(task_id, f"[pool] 领取任务（rounds={task.rounds}，提示 {len(prompt)} 字符）。")
+            llm = None if self.drive is not None else load_config(self.root)  # 每任务现读：设置页改钥后即生效
             result = run_with_watchdog(
-                self.root, task_id, prompt, base_url=self._llm.llm_base_url if self._llm else "",
-                api_key=self._llm.llm_api_key if self._llm else "", resume_prompt=resume,
+                self.root, task_id, prompt, base_url=llm.llm_base_url if llm else "",
+                api_key=llm.llm_api_key if llm else "", resume_prompt=resume,
                 home=self.home, timeout=self.timeout, max_rounds=self.max_rounds,
                 drive=self._round_drive(task_id), log=lambda message: self._log_line(task_id, message))
             for index, completed in enumerate(result.results, start=1):

@@ -31,12 +31,13 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, W
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.agent.hermes import AgentError, write_hermes_config
 from app.agent.watchdog import result_status
 from app.server import chars, settings
 from app.server.pool import AgentPool, EventBus
 from app.server.prompts import followup_prompt, session_progress, task_prompt
 from app.server.store import TERMINAL, Task, TaskStore
-from scripts.config import ConfigError, resolve_remake_home
+from scripts.config import ConfigError, load_config, resolve_remake_home
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 TASK_ID_RE = re.compile(r"[A-Za-z0-9-]+")  # MCP sid 口径：字母/数字/-（队列按 _<sid>_ 匹配）
@@ -173,6 +174,9 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
                           mode: str = Form("edit"), budget: int | None = Form(None),
                           start: float = Form(0.0), dur: float | None = Form(None),
                           cast: str = Form("{}")):
+        cfg = load_config(root)
+        if not cfg.llm_api_key.strip() or not cfg.painter_api_key.strip():
+            raise HTTPException(400, "尚未配置 API 密钥：请先在「设置」页填写后再创建任务")
         if mode not in ("swap", "edit"):
             raise HTTPException(400, "mode 须为 swap 或 edit")
         if not description.strip():
@@ -313,9 +317,14 @@ def create_app(root: Path, home: Path | None = None, *, start_pool: bool = False
     @app.put("/api/settings")
     def put_settings(body: dict):
         try:
-            return settings.update_settings(root, body)
+            view = settings.update_settings(root, body)
         except ConfigError as exc:
             raise HTTPException(400, str(exc))
+        try:
+            write_hermes_config(root)  # 密钥同步进 Hermes 注册（.env/config.yaml），下一任务即生效
+        except AgentError:
+            pass  # Hermes 未安装时不阻断保存，启动时自动补注册
+        return view
 
     # ── WS 进度（M5.2：快照 + 事件总线实时下发）────────────────────────────
     @app.websocket("/ws/progress")

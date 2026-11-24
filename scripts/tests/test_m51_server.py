@@ -203,6 +203,9 @@ class ApiTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self._tmp.name)
         self.home = self.root / "home"
+        # 创建任务前置校验要求密钥齐备：夹具预置双密钥（镜像口径由用户在设置页填写）
+        (self.root / "config.toml").write_text(
+            '[llm]\napi_key = "test-llm"\n\n[painter]\napi_key = "test-painter"\n', encoding="utf-8")
         self.app = create_app(self.root, home=self.home)
         self.store = self.app.state.store
         self._stack = ExitStack()
@@ -230,6 +233,15 @@ class ApiTests(unittest.TestCase):
                                              encoding="utf-8")
         self.store.set_status(task_id, "running")
         return final
+
+    def test_create_requires_api_keys(self):
+        """开箱无密钥：创建被 400 拦截，文案引导去设置页填写。"""
+        (self.root / "config.toml").write_text('[llm]\napi_key = ""\n', encoding="utf-8")
+        response = self.client.post(
+            "/api/tasks", data={"description": "x", "mode": "edit"},
+            files={"video": ("clip.mp4", b"v", "video/mp4")})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("设置", response.json()["detail"])
 
     def test_create_edit_task_lands_upload(self) -> None:
         task = self._create()

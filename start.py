@@ -10,7 +10,8 @@
 - `uv run start.py --dev`：本地零 GPU，改用队列协议假件 scripts/fake_comfy_worker.py（同一套参数）；
 - `--host/--port`：Web 监听地址（缺省 127.0.0.1:8000）。
 
-启动预检：空 api_key/base_url 直接报错不拉起（避免任务领取后才发现缺配）；
+启动预检：空 api_key/base_url 仅警告不拦截（镜像开箱无密钥，UI 设置页为唯一填入口，
+服务必须先起；创建任务由后端拦截提示，进程池每任务现读密钥、填后即生效无需重启）；
 ffmpeg ≥5.1 解析（PATH 或 Hermes 工具目录）并注入本进程 PATH——agent 子进程继承，
 不依赖安装器进程的临时 PATH；非 --dev 缺 ffmpeg 报错，--dev 仅警告。
 Hermes 运行时启动自检：失效自动修复（快速还原无效则重装），无需人工介入。
@@ -40,18 +41,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
 
-def check_api_keys(config: Config) -> None:
-    """空密钥/空端点预检：agent 链（LLM 决策 + painter 绘制）base_url 与 api_key 须配对齐备。
+def check_api_keys(config: Config) -> list[str]:
+    """空密钥/空端点预检（警告不拦截）：agent 链（LLM 决策 + painter 绘制）base_url 与 api_key 须配对齐备。
 
-    端点为空时 Hermes 静默回落出厂默认模型与 OpenRouter 端点，任务领取后才以 404 暴露，
-    故启动即报错。
+    镜像开箱无密钥、UI 设置页是唯一填入口，服务必须先起，故缺项仅返回警告清单；
+    创建任务由后端拦截提示（api.py），进程池每任务现读密钥，填后即生效无需重启。
     """
-    missing = [f"[{name}].{key}" for name, pairs in
-               (("llm", (("base_url", config.llm_base_url), ("api_key", config.llm_api_key))),
-                ("painter", (("base_url", config.painter_base_url), ("api_key", config.painter_api_key))))
-               for key, value in pairs if not value.strip()]
-    if missing:
-        raise ConfigError(f"{'、'.join(missing)} 为空：请在 config.toml 填写后重启。")
+    return [f"[{name}].{key}" for name, pairs in
+            (("llm", (("base_url", config.llm_base_url), ("api_key", config.llm_api_key))),
+             ("painter", (("base_url", config.painter_base_url), ("api_key", config.painter_api_key))))
+            for key, value in pairs if not value.strip()]
 
 
 def ensure_ffmpeg(root: Path) -> Path | None:
@@ -155,11 +154,13 @@ def main(
     root = root or Path(__file__).resolve().parent
     try:
         config = load_config(root)
-        check_api_keys(config)
+        missing = check_api_keys(config)
         command = worker_command(root, dev=args.dev, config=config)
     except (WorkerError, ConfigError) as exc:
-        print(f"[start] {exc}", file=sys.stderr)
+        log(f"[start] {exc}")
         return 1
+    if missing:
+        log(f"[start] 注意：{'、'.join(missing)} 为空——服务正常启动，在设置页填好密钥后即可运行任务。")
     ffmpeg_dir = ensure_ffmpeg(root)
     if ffmpeg_dir is not None:
         log(f"[start] ffmpeg 就绪：{ffmpeg_dir}（已注入 PATH，agent 子进程可用）。")

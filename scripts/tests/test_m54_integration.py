@@ -45,7 +45,7 @@ class PoolDriveWiringTests(unittest.TestCase):
             (root / "config.toml").write_text(
                 f"[paths]\nremake_home = \"{home.as_posix()}\"\n\n"
                 "[llm]\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"cfg-key\"\n"
-                "model = \"cfg-model\"\n", encoding="utf-8")
+                "model = \"cfg-model\"\n\n[painter]\napi_key = \"cfg-paint\"\n", encoding="utf-8")
             captured: dict = {}
 
             def fake_watchdog(_root, sid, prompt, **kwargs):
@@ -75,6 +75,48 @@ class PoolDriveWiringTests(unittest.TestCase):
             self.assertEqual(captured["home"], home.resolve())
             self.assertEqual(captured["max_rounds"], 3)
             self.assertIn(f"Session id: {tid}. Kind: edit.", captured["prompt"])
+
+    def test_pool_reloads_llm_key_per_task(self) -> None:
+        """进程池每任务现读 config：设置页改密钥后下一任务即生效，无需重启服务。"""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+            root = Path(temporary)
+            home = root / "home"
+
+            def write_cfg(key: str) -> None:
+                (root / "config.toml").write_text(
+                    f"[paths]\nremake_home = \"{home.as_posix()}\"\n\n"
+                    "[llm]\nbase_url = \"http://127.0.0.1:9/v1\"\n"
+                    f"api_key = \"{key}\"\nmodel = \"cfg-model\"\n\n"
+                    "[painter]\napi_key = \"cfg-paint\"\n", encoding="utf-8")
+
+            write_cfg("k1")
+            captured: list[dict] = []
+
+            def fake_watchdog(_root, sid, prompt, **kwargs):
+                captured.append(dict(kwargs, sid=sid))
+                session = kwargs["home"] / "sessions" / sid
+                session.mkdir(parents=True, exist_ok=True)
+                (session / "result.json").write_text(
+                    json.dumps({"status": "done", "final": ""}), encoding="utf-8")
+                return WatchdogResult(rounds=1, delivered=True, session_dir=session,
+                                      prompts=[prompt],
+                                      results=[subprocess.CompletedProcess(args=["hermes"], returncode=0)])
+
+            with mock.patch("app.server.pool.run_with_watchdog", fake_watchdog):
+                app = create_app(root, start_pool=True, ticker_interval=0.2)
+                with TestClient(app) as client:
+                    for index in (1, 2):
+                        if index == 2:
+                            write_cfg("k2")  # 模拟设置页保存新密钥
+                        response = client.post(
+                            "/api/tasks",
+                            files={"video": (f"a{index}.mp4", b"\x00\x01", "video/mp4")},
+                            data={"description": f"task {index}", "mode": "edit"})
+                        self.assertEqual(response.status_code, 201, response.text)
+                        deadline = time.monotonic() + 10
+                        while time.monotonic() < deadline and len(captured) < index:
+                            time.sleep(0.05)
+            self.assertEqual([item["api_key"] for item in captured], ["k1", "k2"])
 
 
 # ── E2E：真 uvicorn 全链路（上传→WS 进度→下载→反馈重制）─────────────────────

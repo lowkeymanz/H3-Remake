@@ -1,7 +1,7 @@
 """M2.4/M5.4：start.py 启动器——worker 守护 + 阶段 9 Web 服务入口（uvicorn + SPA 静态服务）。
 
 零费单测：worker 命令构建（真实/--dev 假件）、main 编排（守护线程 + serve 注入、
-stop 收尾、中断 130、缺件/坏配置报错）、启动预检（空密钥/空端点报错 + Hermes 注册接线、
+stop 收尾、中断 130、缺件/坏配置报错、缺钥警告仍启动）、启动预检（空密钥/空端点警告清单 + Hermes 注册接线、
 ffmpeg PATH 注入）、web_app 组装（进程池启用 + dist 缺省路径）、create_app(web_dist=...)
 SPA 静态服务（客户端路由回退/真实文件直出/api 前缀不吞 404/越界路径不泄露 dist 外文件）。
 """
@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.agent.hermes import AgentError
 from app.server.api import create_app
-from scripts.config import Config, ConfigError
+from scripts.config import Config
 from scripts.installer import venv_python
 from scripts.worker import build_command
 from start import check_api_keys, ensure_ffmpeg, main, supervise_worker, web_app, worker_command
@@ -144,14 +144,15 @@ class MainTests(unittest.TestCase):
             self.assertEqual(supervised, [])
             self.assertEqual(served, [])
 
-    def test_main_empty_api_keys_reports_without_starting(self) -> None:
+    def test_main_empty_api_keys_warns_but_starts(self) -> None:
+        """镜像开箱无密钥：服务照常启动（UI 是唯一填钥入口），创建任务由后端拦截。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = make_root(tmp)
             (root / "config.toml").write_text('[llm]\napi_key = ""\n', encoding="utf-8")
             code, supervised, _stops, served = self._run_main(root, ["--dev"])
-            self.assertEqual(code, 1)
-            self.assertEqual(supervised, [])  # 缺钥不拉起守护，也不起 Web
-            self.assertEqual(served, [])
+            self.assertEqual(code, 0)
+            self.assertEqual(len(supervised), 1)  # 缺钥照常拉起守护与 Web
+            self.assertEqual(len(served), 1)
 
     def test_main_real_mode_requires_ffmpeg(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,23 +213,20 @@ class MainTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
-    """启动预检：空密钥报错面 + ffmpeg 解析/PATH 注入（复用安装器校验，零下载零费）。"""
+    """启动预检：空密钥/空端点警告清单 + ffmpeg 解析/PATH 注入（复用安装器校验，零下载零费）。"""
 
     def test_check_api_keys_reports_missing_sections(self) -> None:
-        with self.assertRaisesRegex(ConfigError, r"\[llm\]\.api_key.*\[painter\]\.api_key"):
-            check_api_keys(Config())
-        with self.assertRaisesRegex(ConfigError, r"\[painter\]\.api_key"):
-            check_api_keys(Config(llm_api_key="k"))
-        with self.assertRaisesRegex(ConfigError, r"\[llm\]\.api_key"):
-            check_api_keys(Config(llm_api_key="   ", painter_api_key="k"))  # 空白视同缺钥
-        check_api_keys(Config(llm_api_key="k1", painter_api_key="k2"))  # 齐备不报错
+        self.assertEqual(check_api_keys(Config()), ["[llm].api_key", "[painter].api_key"])
+        self.assertEqual(check_api_keys(Config(llm_api_key="k")), ["[painter].api_key"])
+        self.assertEqual(check_api_keys(Config(llm_api_key="   ", painter_api_key="k")), ["[llm].api_key"])  # 空白视同缺钥
+        self.assertEqual(check_api_keys(Config(llm_api_key="k1", painter_api_key="k2")), [])  # 齐备无警告
 
     def test_check_api_keys_reports_empty_base_url(self) -> None:
-        """端点为空同样启动即拦：否则 Hermes 静默回落出厂默认模型与 OpenRouter 端点。"""
-        with self.assertRaisesRegex(ConfigError, r"\[llm\]\.base_url"):
-            check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", llm_base_url=""))
-        with self.assertRaisesRegex(ConfigError, r"\[painter\]\.base_url"):
-            check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", painter_base_url="  "))
+        """端点为空同样进警告清单：否则 Hermes 静默回落出厂默认模型与 OpenRouter 端点。"""
+        self.assertEqual(check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", llm_base_url="")),
+                         ["[llm].base_url"])
+        self.assertEqual(check_api_keys(Config(llm_api_key="k1", painter_api_key="k2", painter_base_url="  ")),
+                         ["[painter].base_url"])
 
     def _tools_dir(self, root: Path) -> Path:
         bindir = root / "data/home/hermes/tools/ffmpeg-6.0/bin"
